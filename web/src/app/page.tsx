@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { ContractAddress } from "@/components/ContractAddress";
 import { CAT_PALETTES, CrescentMoon, Cloud, FloatingIsle, InkDivider, LunettaCat, StarField } from "@/components/illustrations";
-import { siteConfig } from "@/lib/config";
+import { renderToken, type Traits } from "@/lib/art/render";
+import { COLLECTION_SIZE } from "@/lib/collection-info";
+import { chainConfig, siteConfig } from "@/lib/config";
 
 const LORE = [
   {
@@ -26,6 +28,14 @@ const TRAIT_MAP = [
   { trait: "Wings", nft: "Lantern gold", game: "Glide: 3 jumps", note: "How far you can drift between isles." },
   { trait: "Scarf", nft: "Ember", game: "Skill: Warm Light", note: "Your signature move against the Hush." },
   { trait: "Rarity", nft: "Rare", game: "Starting isle: Lantern Reach", note: "Where your story begins." },
+];
+
+// Display-only samples (not tied to real token ids, so they reveal nothing about unminted tokens).
+const SAMPLES: { traits: Traits; seed: number; label: string }[] = [
+  { label: "Common", seed: 11, traits: { Background: "Dusk", Isle: "Bare Isle", Fur: "Snow", Wings: "Gold Feather", Scarf: "Ember", Accessory: "None", Eyes: "Open", Mark: "Crescent" } },
+  { label: "Uncommon", seed: 22, traits: { Background: "Tide", Isle: "Grove", Fur: "Moss", Wings: "Leaf", Scarf: "Petal", Accessory: "Sprout", Eyes: "Sleepy", Mark: "Star" } },
+  { label: "Rare", seed: 33, traits: { Background: "Plum", Isle: "Cloud Bank", Fur: "Ember", Wings: "Bat", Scarf: "Tide", Accessory: "Witch Hat", Eyes: "Wink", Mark: "Full Moon" } },
+  { label: "Legendary", seed: 44, traits: { Background: "Dawn", Isle: "Lantern Reach", Fur: "Petal", Wings: "Starlight", Scarf: "Moss", Accessory: "Flower Crown", Eyes: "Heterochromia", Mark: "Star" } },
 ];
 
 export default function HomePage() {
@@ -107,6 +117,56 @@ export default function HomePage() {
                 </li>
               ))}
             </ul>
+          </div>
+        </div>
+      </section>
+
+      {/* ------------------------------------------------------------ THE COLLECTION */}
+      <section aria-labelledby="keepers-title" className="relative bg-paper text-ink">
+        <div className="paper-grain">
+          <div className="mx-auto max-w-6xl px-5 pb-24">
+            <div className="grid items-end gap-6 md:grid-cols-2">
+              <div>
+                <p className="font-display text-lg font-semibold text-ember">The collection</p>
+                <h2 id="keepers-title" className="mt-2 font-display text-4xl font-bold leading-tight sm:text-5xl">
+                  {COLLECTION_SIZE.toLocaleString()} keepers. No two alike.
+                </h2>
+              </div>
+              <p className="text-lg leading-relaxed text-ink/80">
+                Eight hand-inked traits (fur, wings, scarf, accessory, eyes, forehead mark, sky and home isle) combine into{" "}
+                {COLLECTION_SIZE.toLocaleString()} unique cats, including five golden Moonborn one-of-ones. Each keeper wakes up the moment
+                it is minted on {chainConfig.chain.name}.
+              </p>
+            </div>
+            <ul className="mt-12 grid grid-cols-2 gap-5 lg:grid-cols-4">
+              {SAMPLES.map((s) => (
+                <li key={s.seed} className="card-paper overflow-hidden p-3">
+                  <div
+                    className="overflow-hidden rounded-2xl border-2 border-ink [&>svg]:h-auto [&>svg]:w-full"
+                    role="img"
+                    aria-label={`Sample ${s.label} Lunetta`}
+                    dangerouslySetInnerHTML={{ __html: renderToken(s.traits, s.seed) }}
+                  />
+                  <p className="mt-3 flex items-center justify-between text-sm">
+                    <span className="font-semibold">Sample</span>
+                    <span className="rounded-full border-2 border-ink bg-lantern px-2.5 py-0.5 text-xs font-semibold">{s.label}</span>
+                  </p>
+                </li>
+              ))}
+            </ul>
+            <dl className="mt-12 grid grid-cols-2 gap-4 sm:grid-cols-4">
+              {[
+                [COLLECTION_SIZE.toLocaleString(), "Lunettas"],
+                ["8", "Trait types"],
+                ["5", "Moonborn 1/1s"],
+                [chainConfig.chain.name, "Network"],
+              ].map(([v, l]) => (
+                <div key={l} className="rounded-3xl border-2 border-ink p-4 text-center">
+                  <dt className="text-sm text-ink/60">{l}</dt>
+                  <dd className="font-display text-2xl font-bold">{v}</dd>
+                </div>
+              ))}
+            </dl>
           </div>
         </div>
       </section>

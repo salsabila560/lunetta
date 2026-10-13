@@ -1,5 +1,20 @@
 # Lunetta launch guide (testnet → mainnet)
 
+## Fastest path: Robinhood Chain from your phone (no terminal)
+
+The site ships with an owner panel at **`/admin`** that deploys and manages the contract straight from your wallet. Default network: **Robinhood Chain mainnet** (chain ID 4663, RPC `https://rpc.mainnet.chain.robinhood.com`, explorer `https://robinhoodchain.blockscout.com`). Use chain ID 46630 (`NEXT_PUBLIC_CHAIN_ID`) to rehearse on Robinhood Chain Testnet first.
+
+1. Open `https://<your-site>/admin` in your wallet's in-app browser (MetaMask, Rainbow, Coinbase Wallet). Have a little ETH on Robinhood Chain for gas.
+2. Connect, check prices/limits, tap **Deploy Lunetta**, confirm in the wallet. The panel shows the contract address and the constructor arguments.
+3. Tap **Sambungkan metadata** (reveal). This points `tokenURI` at `/api/metadata/`; each token's art stays hidden until that token is minted, so rarities can't be sniped.
+4. Make the public site use the contract: commit the address into `web/data/deployment.json` (or set `NEXT_PUBLIC_CONTRACT_ADDRESS` in Vercel) and redeploy.
+5. Verify on Blockscout: *Verify & Publish → Solidity (Standard JSON input)*, compiler `v0.8.26+commit.8a97fa7a`, upload `contracts/verification/Lunetta.standard-input.json`, contract `src/Lunetta.sol:Lunetta`, paste the constructor arguments shown in the panel.
+6. When ready: **Fase → Publik** (or Whitelist after setting the Merkle root). Withdraw from the same panel.
+7. Transfer ownership to a multisig once the mint is running smoothly (see below).
+
+The rest of this guide covers the Foundry/CLI route.
+
+
 Follow the steps in order. Don't skip the testnet rehearsal: run the *entire* flow there with real wallets, including reveal and withdraw.
 
 Commands assume Base. For Ethereum, swap `base_sepolia`/`base` for your RPC aliases and use chain IDs `11155111`/`1`.

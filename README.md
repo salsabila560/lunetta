@@ -13,7 +13,9 @@ This repository contains everything needed to launch the collection:
 | `docs/` | Mainnet launch guide and pre-mainnet security checklist |
 | `.github/workflows/ci.yml` | Runs `forge test` and `next build` on every push |
 
-Default target chain is **Base** (Base Sepolia for testing). Ethereum mainnet and Sepolia are also supported by changing one env var.
+Default target chain is **Robinhood Chain mainnet** (chain ID 4663; testnet 46630). Base and Ethereum are also supported by changing `NEXT_PUBLIC_CHAIN_ID`.
+
+**Collection:** 1,000 unique Lunettas generated from 8 traits (`web/data/collection.json`, reproducible with `python3 web/scripts/generate-collection.py`), including 5 Moonborn 1/1s. Art is rendered on demand as SVG by `web/src/lib/art/render.ts` and served from `/api/image/<id>`; metadata from `/api/metadata/<id>.json`. Both stay hidden until a token is minted. **Owner panel:** `/admin` deploys and manages the contract from a wallet.
 
 ---
 

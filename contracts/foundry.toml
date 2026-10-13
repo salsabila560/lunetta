@@ -5,7 +5,7 @@ libs = ["lib"]
 solc_version = "0.8.26"
 optimizer = true
 optimizer_runs = 500
-evm_version = "cancun"
+evm_version = "shanghai"
 remappings = [
   "erc721a/=lib/erc721a/",
   "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
@@ -16,6 +16,8 @@ remappings = [
 runs = 512
 
 [rpc_endpoints]
+robinhood = "https://rpc.mainnet.chain.robinhood.com"
+robinhood_testnet = "https://rpc.testnet.chain.robinhood.com"
 base_sepolia = "${BASE_SEPOLIA_RPC_URL}"
 base = "${BASE_RPC_URL}"
 
