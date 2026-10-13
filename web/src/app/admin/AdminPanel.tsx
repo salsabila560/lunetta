@@ -340,7 +340,19 @@ function ManageCard({ contract, me }: { contract: Address; me: Address }) {
             </Action>
           )}
 
-          <Action title="Fase mint" desc="Buka whitelist dulu, lalu publik. Pilih Tutup untuk menghentikan mint kapan saja.">
+          {revealed === true && phase !== 2 && (
+            <Action title="3. Buka mint publik" desc="Setelah ini tombol Mint di website langsung berfungsi untuk semua orang.">
+              <button
+                className="btn-lantern w-full"
+                disabled={busy}
+                onClick={() => send(() => writeContractAsync({ ...c, functionName: "setPhase", args: [2] }))}
+              >
+                Buka mint publik
+              </button>
+            </Action>
+          )}
+
+          <Action title="Fase mint" desc="Publik = semua orang bisa mint. Pilih Tutup untuk menghentikan mint kapan saja.">
             <div className="grid grid-cols-3 gap-2">
               {PHASES.map((label, i) => (
                 <button

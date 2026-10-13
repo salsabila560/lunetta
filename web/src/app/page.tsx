@@ -245,11 +245,11 @@ export default function HomePage() {
             The isles need keepers.
           </h2>
           <p className="mx-auto mt-4 max-w-xl text-lg text-paper/80">
-            Join the whitelist for an earlier, cheaper mint. Signing up is free and only takes a wallet signature.
+            Mint is open to everyone. Connect a wallet on {chainConfig.chain.name}, pick how many, and your Lunetta wakes up in your gallery.
           </p>
           <div className="mt-8 flex flex-wrap justify-center gap-4">
-            <Link href="/whitelist" className="btn-lantern">Join the whitelist</Link>
-            <Link href="/mint" className="btn-ghost">Go to mint</Link>
+            <Link href="/mint" className="btn-lantern">Mint a Lunetta</Link>
+            <Link href="/gallery" className="btn-ghost">Your gallery</Link>
           </div>
         </div>
       </section>

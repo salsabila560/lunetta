@@ -127,8 +127,8 @@ export function MintPanel() {
     return (
       <Panel>
         <p className="font-display text-2xl font-bold">Mint opens soon</p>
-        <p className="mt-2 text-ink/75">The contract hasn&apos;t been announced yet. Join the whitelist to mint first.</p>
-        <Link href="/whitelist" className="btn-lantern mt-6 w-full">Join the whitelist</Link>
+        <p className="mt-2 text-ink/75">The Lunetta contract is being deployed on {chainConfig.chain.name}. Minting opens here as soon as it&apos;s live.</p>
+        <Link href="/" className="btn-paper mt-6 w-full">Back to the isles</Link>
       </Panel>
     );
   }
@@ -203,10 +203,8 @@ export function MintPanel() {
 
       {/* pricing */}
       <dl className="mt-6 grid grid-cols-2 gap-3">
-        <PriceTile label="Whitelist price" value={`${formatEth(s.whitelistPrice)} ETH`} active={phase === 1} />
-        <PriceTile label="Public price" value={`${formatEth(s.publicPrice)} ETH`} active={phase === 2} />
-        <PriceTile label="Whitelist limit" value={`${s.whitelistLimit.toString()} per wallet`} active={phase === 1} />
-        <PriceTile label="Public limit" value={`${s.publicLimit.toString()} per wallet`} active={phase === 2} />
+        <PriceTile label="Price" value={`${formatEth(phase === 1 ? s.whitelistPrice : s.publicPrice)} ETH`} active={phase !== 0} />
+        <PriceTile label="Per wallet" value={`${(phase === 1 ? s.whitelistLimit : s.publicLimit).toString()} max`} active={phase !== 0} />
       </dl>
 
       <div className="mt-7 border-t-2 border-dashed border-ink/25 pt-6">
