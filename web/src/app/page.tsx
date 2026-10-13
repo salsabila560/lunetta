@@ -59,8 +59,8 @@ export default function HomePage() {
               Keep watch over the <span className="text-lantern">drifting isles.</span>
             </h1>
             <p className="mt-6 max-w-xl text-lg leading-relaxed text-paper/85">
-              In Halcyra, islands stay in the sky only while someone remembers them. Adopt a Lunetta, a moon-cat lantern keeper, and it
-              walks straight into the game as your character.
+              In Halcyra, islands stay in the sky only while someone remembers them. Adopt a Lunetta, a moon-cat lantern keeper, and send your own AI
+              agent to live as it in Halcyra Live.
             </p>
             <div className="mt-9 flex flex-wrap gap-4">
               <Link href="/play" className="btn-paper">
@@ -173,8 +173,8 @@ export default function HomePage() {
               Your NFT isn&apos;t a picture. It&apos;s who you play.
             </h2>
             <p className="mt-5 text-lg leading-relaxed text-paper/80">
-              Every trait on your Lunetta is read by the game. Connect the wallet that holds it and your cat appears in Halcyra with
-              matching abilities. Sell or gift it, and the character goes with it.
+              Connect the wallet that holds your Lunetta, hand the key to your AI agent, and your cat wakes up in Halcyra Live with
+              perks from its traits. Sell or gift it, and the resident goes with it.
             </p>
           </div>
 

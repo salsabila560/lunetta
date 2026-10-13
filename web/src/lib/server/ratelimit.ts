@@ -4,16 +4,21 @@ import { Redis } from "@upstash/redis";
 
 type Result = { success: boolean; reset: number };
 
-const hasUpstash = Boolean(process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN);
+const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
+const redis = url && token ? new Redis({ url, token }) : null;
 
-const upstash = hasUpstash
-  ? new Ratelimit({
-      redis: Redis.fromEnv(),
-      limiter: Ratelimit.slidingWindow(5, "10 m"),
-      prefix: "lunetta:wl",
-      analytics: false,
-    })
-  : null;
+const limiters = new Map<string, Ratelimit>();
+function limiter(max: number, window: `${number} m` | `${number} h`, prefix: string) {
+  const key = `${prefix}:${max}:${window}`;
+  if (!redis) return null;
+  let l = limiters.get(key);
+  if (!l) {
+    l = new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(max, window), prefix, analytics: false });
+    limiters.set(key, l);
+  }
+  return l;
+}
 
 // Development fallback only: per-instance memory is NOT shared across serverless lambdas.
 const memory = new Map<string, number[]>();
@@ -25,13 +30,20 @@ function memoryLimit(key: string, max = 5, windowMs = 10 * 60 * 1000): Result {
   return { success: hits.length <= max, reset: hits[0] + windowMs };
 }
 
-export async function rateLimit(key: string): Promise<Result> {
-  if (upstash) {
-    const r = await upstash.limit(key);
+export async function rateLimit(
+  key: string,
+  opts: { max?: number; window?: `${number} m` | `${number} h`; prefix?: string } = {},
+): Promise<Result> {
+  const max = opts.max ?? 5;
+  const window = opts.window ?? "10 m";
+  const l = limiter(max, window, opts.prefix ?? "lunetta:wl");
+  if (l) {
+    const r = await l.limit(key);
     return { success: r.success, reset: r.reset };
   }
   if (process.env.NODE_ENV === "production") {
-    console.warn("[ratelimit] UPSTASH_REDIS_* not set — falling back to in-memory limiter. Configure Upstash before launch.");
+    console.warn("[ratelimit] Upstash Redis not configured — falling back to in-memory limiter. Configure Upstash before launch.");
   }
-  return memoryLimit(key);
+  const ms = parseInt(window, 10) * (window.endsWith("h") ? 3_600_000 : 60_000);
+  return memoryLimit(`${opts.prefix ?? "wl"}:${key}`, max, ms);
 }
