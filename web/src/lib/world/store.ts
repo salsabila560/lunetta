@@ -78,10 +78,36 @@ export async function getResident(id: string): Promise<Resident | null> {
   return raw ? (JSON.parse(raw) as Resident) : null;
 }
 
+/**
+ * With `automaticDeserialization: false` Upstash returns HGETALL as the raw flat
+ * reply `[field, value, field, value, ...]`, not an object. Accept both shapes and
+ * return only the values.
+ */
+function hashValues(raw: unknown): unknown[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.filter((_, i) => i % 2 === 1);
+  if (typeof raw === "object") return Object.values(raw as Record<string, unknown>);
+  return [];
+}
+
+function parseResident(v: unknown): Resident | null {
+  try {
+    const r = (typeof v === "string" ? JSON.parse(v) : v) as Resident | null;
+    return r && typeof r === "object" && typeof r.id === "string" ? r : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function listResidents(): Promise<Resident[]> {
-  if (!redis) return [...mem().residents.values()].map((v) => JSON.parse(v) as Resident);
-  const all = (await redis.hgetall<Record<string, string>>(K.residents)) ?? {};
-  return Object.values(all).map((v) => JSON.parse(v) as Resident);
+  const values = redis ? hashValues(await redis.hgetall(K.residents)) : [...mem().residents.values()];
+  const out: Resident[] = [];
+  for (const v of values) {
+    const r = parseResident(v);
+    if (r) out.push(r);
+    else console.error("[world] skipped unreadable resident record");
+  }
+  return out;
 }
 
 async function saveResident(r: Resident) {
