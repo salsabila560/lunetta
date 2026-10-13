@@ -1,0 +1,5 @@
+.DS_Store
+.env
+contracts/lib/
+node_modules/
+.next/
