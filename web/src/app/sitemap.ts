@@ -3,7 +3,7 @@ import { siteConfig } from "@/lib/config";
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const now = new Date();
-  return ["", "/mint"].map((path) => ({
+  return ["", "/play", "/mint"].map((path) => ({
     url: `${siteConfig.url}${path}`,
     lastModified: now,
     changeFrequency: "weekly" as const,

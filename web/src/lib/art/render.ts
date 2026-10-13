@@ -258,7 +258,7 @@ function accessory(t: Traits) {
   }
 }
 
-function cat(t: Traits) {
+function catBody(t: Traits) {
   const fur = FUR[t.Fur] ?? FUR.Parchment;
   let s = "";
   // tail
@@ -282,7 +282,16 @@ function cat(t: Traits) {
   s += line("M82 104 L64 100 M82 110 L63 112 M158 104 L176 100 M158 110 L177 112", 1.2);
   s += scarf(t);
   s += accessory(t);
-  return `<g transform="translate(80 104)">${s}</g>`;
+  return s;
+}
+
+function cat(t: Traits) {
+  return `<g transform="translate(80 104)">${catBody(t)}</g>`;
+}
+
+/** Just the cat on a transparent background (240x240, feet at y≈206). Used as the game sprite. */
+export function renderCat(traits: Traits): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -30 240 270" width="240" height="270">${catBody(traits)}</svg>`;
 }
 
 export function renderToken(traits: Traits, seed: number): string {

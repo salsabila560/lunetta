@@ -54,6 +54,7 @@ export function SiteFooter() {
             <p className="font-display text-lg font-semibold">Explore</p>
             <ul className="mt-3 space-y-2 text-ink/80">
               <li><Link className="hover:underline" href="/#world">The world</Link></li>
+              <li><Link className="hover:underline" href="/play">Play Lantern Run</Link></li>
               <li><Link className="hover:underline" href="/mint">Mint</Link></li>
               <li><Link className="hover:underline" href="/gallery">Your gallery</Link></li>
             </ul>

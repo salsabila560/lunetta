@@ -3,7 +3,7 @@ import { ContractAddress } from "@/components/ContractAddress";
 import { CAT_PALETTES, CrescentMoon, Cloud, FloatingIsle, InkDivider, LunettaCat, StarField } from "@/components/illustrations";
 import { renderToken, type Traits } from "@/lib/art/render";
 import { COLLECTION_SIZE } from "@/lib/collection-info";
-import { chainConfig, siteConfig } from "@/lib/config";
+import { chainConfig } from "@/lib/config";
 
 const LORE = [
   {
@@ -39,8 +39,6 @@ const SAMPLES: { traits: Traits; seed: number; label: string }[] = [
 ];
 
 export default function HomePage() {
-  const hasPlay = Boolean(siteConfig.playUrl);
-
   return (
     <>
       {/* ------------------------------------------------------------ HERO */}
@@ -65,15 +63,9 @@ export default function HomePage() {
               walks straight into the game as your character.
             </p>
             <div className="mt-9 flex flex-wrap gap-4">
-              {hasPlay ? (
-                <a href={siteConfig.playUrl} className="btn-paper" target="_blank" rel="noopener noreferrer">
-                  Play
-                </a>
-              ) : (
-                <span className="btn-paper cursor-default" aria-disabled="true">
-                  Play <span className="rounded-full bg-ink px-2 py-0.5 text-xs font-semibold text-paper">Soon</span>
-                </span>
-              )}
+              <Link href="/play" className="btn-paper">
+                Play
+              </Link>
               <Link href="/mint" className="btn-lantern">
                 Mint a Lunetta
               </Link>
