@@ -26,6 +26,9 @@ const nextConfig = {
   webpack: (config) => {
     // Optional peer deps pulled in by WalletConnect / MetaMask SDK
     config.externals.push("pino-pretty", "lokijs", "encoding");
+    // @coinbase/cdp-sdk is pulled in by the (unused) Base Account connector and
+    // fails to bundle; stub it out so the build succeeds.
+    config.resolve.alias = { ...config.resolve.alias, "@coinbase/cdp-sdk": false };
     return config;
   },
 };
