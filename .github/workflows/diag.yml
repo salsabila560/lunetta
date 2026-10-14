@@ -7,28 +7,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: foundry-rs/foundry-toolchain@v1
-      - name: Inspect payment token
+      - name: Live mint state
         env:
           RPC: https://rpc.mainnet.chain.robinhood.com
           T: "0xcc49765a547f1ea605228846365b74e10cf46214"
-          OWNER: "0xdBC844C1D92d99303EEf6Cd853BcF82BBE505E6B"
           NFT: "0x83c126042B40F45Cc0be74335a5b8e47f44709e9"
           DEAD: "0x000000000000000000000000000000000000dEaD"
         run: |
           set +e
           n(){ echo "::notice title=$1::$2"; }
-          n code "$(cast code $T --rpc-url $RPC | wc -c)"
-          n name "$(cast call $T 'name()(string)' --rpc-url $RPC 2>&1 | head -1)"
-          n symbol "$(cast call $T 'symbol()(string)' --rpc-url $RPC 2>&1 | head -1)"
-          n decimals "$(cast call $T 'decimals()(uint8)' --rpc-url $RPC 2>&1 | head -1)"
-          n supply "$(cast call $T 'totalSupply()(uint256)' --rpc-url $RPC 2>&1 | head -1)"
-          n ownerBal "$(cast call $T 'balanceOf(address)(uint256)' $OWNER --rpc-url $RPC 2>&1 | head -1)"
-          n deadBal "$(cast call $T 'balanceOf(address)(uint256)' $DEAD --rpc-url $RPC 2>&1 | head -1)"
-          n tokOwner "$(cast call $T 'owner()(address)' --rpc-url $RPC 2>&1 | head -1)"
-          n nftToken "$(cast call $NFT 'paymentToken()(address)' --rpc-url $RPC) open=$(cast call $NFT 'mintOpen()(bool)' --rpc-url $RPC) minted=$(cast call $NFT 'totalMinted()(uint256)' --rpc-url $RPC)"
-          n simTransferToDead "$(cast call $T 'transfer(address,uint256)(bool)' $DEAD 1000000000000000000 --from $OWNER --rpc-url $RPC 2>&1 | head -2 | tr '\n' ' ')"
-          n simApprove "$(cast call $T 'approve(address,uint256)(bool)' $NFT 1000000000000000000000000 --from $OWNER --rpc-url $RPC 2>&1 | head -2 | tr '\n' ' ')"
-          # find a top holder from deployer's creation if owner holds nothing
-          n implSlot "$(cast storage $T 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc --rpc-url $RPC)"
-          n codeHead "$(cast code $T --rpc-url $RPC | cut -c1-120)"
-          n selectors "$(cast selectors $(cast code $T --rpc-url $RPC) 2>/dev/null | awk '{print $1" "$2}' | tr '\n' ';' | cut -c1-900)"
+          c(){ cast call $NFT "$@" --rpc-url $RPC 2>&1 | tr '\n' ' '; }
+          n open "$(c 'mintOpen()(bool)')"
+          n token "$(c 'paymentToken()(address)') locked=$(c 'paymentTokenLocked()(bool)')"
+          n minted "$(c 'totalMinted()(uint256)') burned=$(c 'totalBurned()(uint256)')"
+          n tiers "$(c 'priceTiers()(uint256[],uint256[])')"
+          n price "current=$(c 'currentPrice()(uint256)') quote5=$(c 'quote(uint256)(uint256)' 5)"
+          n limit "$(c 'walletLimit()(uint256)') revealed=$(c 'revealed()(bool)')"
+          n dead "$(cast call $T 'balanceOf(address)(uint256)' $DEAD --rpc-url $RPC)"
