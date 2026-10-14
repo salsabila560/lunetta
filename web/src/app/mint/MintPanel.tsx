@@ -1,9 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
-import { erc20Abi, formatUnits, zeroAddress, type Hex } from "viem";
+import { erc20Abi, formatUnits, zeroAddress } from "viem";
 import {
   useAccount,
   useBalance,
@@ -19,8 +18,6 @@ import { lunettaAbi } from "@/lib/abi";
 import { chainConfig, explorerTx } from "@/lib/config";
 import { friendlyError } from "@/lib/errors";
 import { lunettaContract } from "@/lib/wagmi";
-
-const PHASES = ["Closed", "Whitelist", "Public"] as const;
 
 function formatAmount(units: bigint, decimals: number) {
   const n = Number(formatUnits(units, decimals));
@@ -41,25 +38,8 @@ export function MintPanel() {
     query: { enabled: chainConfig.isContractConfigured, refetchInterval: 6_000 },
   });
 
-  const onchainRoot = useReadContract({
-    ...lunettaContract,
-    abi: lunettaAbi,
-    functionName: "merkleRoot",
-    query: { enabled: chainConfig.isContractConfigured },
-  });
-
   const s = state.data;
-  const phase = s ? Number(s.phase) : 0;
-
-  const proof = useQuery({
-    queryKey: ["proof", address],
-    enabled: Boolean(address) && phase === 1,
-    queryFn: async () => {
-      const res = await fetch(`/api/proof?address=${address}`);
-      if (!res.ok) throw new Error("Couldn't check whitelist status.");
-      return (await res.json()) as { eligible: boolean; proof: Hex[]; root: Hex | null };
-    },
-  });
+  const open = s?.mintOpen ?? false;
 
   // Gas is still paid in ETH; the mint itself is paid in the project token, which is burned.
   const gasBalance = useBalance({ address, chainId: chainConfig.chainId, query: { enabled: Boolean(address) } });
@@ -101,15 +81,15 @@ export function MintPanel() {
 
   const derived = useMemo(() => {
     if (!s) return null;
-    const price = phase === 1 ? s.whitelistPrice : s.publicPrice;
-    const limit = phase === 1 ? s.whitelistLimit : s.publicLimit;
-    const minted = phase === 1 ? s.whitelistMintedBy : s.publicMintedBy;
+    const price = s.price;
+    const limit = s.walletLimit;
+    const minted = s.mintedBy;
     const supplyLeft = s.maxSupply - s.totalMinted;
     const walletLeft = limit > minted ? limit - minted : 0n;
     const maxQty = Number(walletLeft < supplyLeft ? walletLeft : supplyLeft);
     const pct = s.maxSupply > 0n ? Number((s.totalMinted * 10_000n) / s.maxSupply) / 100 : 0;
     return { price, limit, minted, supplyLeft, walletLeft, maxQty, pct, soldOut: supplyLeft === 0n };
-  }, [s, phase]);
+  }, [s]);
 
   useEffect(() => {
     if (derived && derived.maxQty > 0 && quantity > derived.maxQty) setQuantity(derived.maxQty);
@@ -117,8 +97,6 @@ export function MintPanel() {
 
   const total = derived ? derived.price * BigInt(quantity) : 0n;
   const wrongChain = isConnected && walletChainId !== chainConfig.chainId;
-  const rootMismatch =
-    phase === 1 && proof.data?.root && onchainRoot.data && proof.data.root.toLowerCase() !== onchainRoot.data.toLowerCase();
 
   const needsToken = total > 0n;
   const needsApproval = needsToken && (allowance ?? 0n) < total;
@@ -133,10 +111,6 @@ export function MintPanel() {
     }
     if (needsToken && tokenBalance !== undefined && tokenBalance < total) {
       setLocalError(`You need ${formatAmount(total, dec)} ${sym} for this mint. Your wallet has ${formatAmount(tokenBalance, dec)}.`);
-      return;
-    }
-    if (phase === 1 && !proof.data?.eligible) {
-      setLocalError("This wallet isn't on the whitelist.");
       return;
     }
     try {
@@ -157,21 +131,12 @@ export function MintPanel() {
         reset();
       }
       setStep("minting");
-      if (phase === 1 && proof.data) {
-        await writeContractAsync({
-          ...lunettaContract,
-          abi: lunettaAbi,
-          functionName: "whitelistMint",
-          args: [BigInt(quantity), proof.data.proof],
-        });
-      } else {
-        await writeContractAsync({
-          ...lunettaContract,
-          abi: lunettaAbi,
-          functionName: "publicMint",
-          args: [BigInt(quantity)],
-        });
-      }
+      await writeContractAsync({
+        ...lunettaContract,
+        abi: lunettaAbi,
+        functionName: "mint",
+        args: [BigInt(quantity)],
+      });
     } catch (err) {
       setLocalError(friendlyError(err));
     } finally {
@@ -216,28 +181,24 @@ export function MintPanel() {
     ? null
     : wrongChain
       ? null
-      : phase === 0
+      : !open
         ? "The mint hasn't started yet."
         : derived.soldOut
           ? null
-          : phase === 1 && proof.isLoading
-            ? "Checking whitelist…"
-            : phase === 1 && proof.data && !proof.data.eligible
-              ? "This wallet isn't on the whitelist. Wait for the public phase."
-              : derived.walletLeft === 0n
-                ? `You've reached the ${PHASES[phase].toLowerCase()} limit for this wallet.`
-                : null;
+          : derived.walletLeft === 0n
+            ? "You've reached the mint limit for this wallet."
+            : null;
 
   const busy = confirmingInWallet || receipt.isLoading || step !== "idle";
-  const priceNow = phase === 1 ? s.whitelistPrice : s.publicPrice;
+  const priceNow = s.price;
   const tokenMissing = priceNow > 0n && !tokenAddress;
 
   return (
     <Panel>
-      {/* phase + supply */}
+      {/* status + supply */}
       <div className="flex items-center justify-between gap-3">
-        <span className={`rounded-full border-2 border-ink px-3 py-1 text-sm font-semibold ${phase === 0 ? "bg-parchment" : "bg-moss"}`}>
-          {phase === 0 ? "Mint closed" : `${PHASES[phase]} phase`}
+        <span className={`rounded-full border-2 border-ink px-3 py-1 text-sm font-semibold ${open ? "bg-moss" : "bg-parchment"}`}>
+          {open ? "Public mint live" : "Mint closed"}
         </span>
         <span className="text-sm text-ink/70">{s.revealed ? "Revealed" : "Unrevealed"}</span>
       </div>
@@ -263,8 +224,8 @@ export function MintPanel() {
 
       {/* pricing */}
       <dl className="mt-6 grid grid-cols-2 gap-3">
-        <PriceTile label="Price" value={priceNow === 0n ? "Free" : `${formatAmount(priceNow, dec)} ${sym}`} active={phase !== 0} />
-        <PriceTile label="Per wallet" value={`${(phase === 1 ? s.whitelistLimit : s.publicLimit).toString()} max`} active={phase !== 0} />
+        <PriceTile label="Price" value={priceNow === 0n ? "Free" : `${formatAmount(priceNow, dec)} ${sym}`} active={open} />
+        <PriceTile label="Per wallet" value={`${s.walletLimit.toString()} max`} active={open} />
       </dl>
       <p className="mt-3 rounded-2xl border-2 border-ink bg-ember/15 p-3 text-sm">
         <span className="font-semibold">Every mint burns its payment.</span> Tokens go straight to the burn address
@@ -290,7 +251,7 @@ export function MintPanel() {
           </button>
         ) : (
           <>
-            {phase !== 0 && (
+            {open && (
               <div className="flex items-center justify-between gap-4">
                 <div>
                   <p className="text-sm font-semibold text-ink/70">Quantity</p>
@@ -316,22 +277,16 @@ export function MintPanel() {
               </div>
             )}
 
-            {phase !== 0 && (
+            {open && (
               <div className="mt-5 flex items-baseline justify-between">
                 <span className="font-semibold">Total (burned)</span>
                 <span className="font-display text-2xl font-bold">{total === 0n ? "Free" : `${formatAmount(total, dec)} ${sym}`}</span>
               </div>
             )}
 
-            {phase !== 0 && tokenMissing && (
+            {open && tokenMissing && (
               <p className="mt-4 rounded-2xl border-2 border-ink bg-lantern/40 p-3 text-sm font-semibold">
                 The payment token isn&apos;t connected yet. Minting opens as soon as it is.
-              </p>
-            )}
-
-            {rootMismatch && (
-              <p className="mt-4 rounded-2xl border-2 border-ink bg-lantern/40 p-3 text-sm font-semibold">
-                The whitelist is being updated. If your mint fails, try again in a few minutes.
               </p>
             )}
 

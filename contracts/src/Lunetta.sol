@@ -6,19 +6,16 @@ import {ERC721AQueryable} from "erc721a/contracts/extensions/ERC721AQueryable.so
 import {ERC2981} from "@openzeppelin/contracts/token/common/ERC2981.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
-import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 /// @title  Lunetta — moon-cat guardians of the floating isles
-/// @notice ERC-721A collection with a Merkle whitelist phase, a public phase,
-///         per-wallet limits, delayed reveal and ERC-2981 royalties.
+/// @notice ERC-721A collection with a single public mint (no whitelist),
+///         a per-wallet limit, delayed reveal and ERC-2981 royalties.
 ///         Mints are paid in an ERC-20 token (not ETH). Every payment is sent
 ///         straight from the buyer to the burn address in the same transaction,
 ///         so the contract and the owner never hold mint proceeds.
-/// @dev    Whitelist leaves follow the OpenZeppelin StandardMerkleTree format:
-///         leaf = keccak256(bytes.concat(keccak256(abi.encode(address)))).
 contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -26,23 +23,14 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
     // Types
     // ---------------------------------------------------------------------
 
-    enum Phase {
-        Closed,
-        Whitelist,
-        Public
-    }
-
     /// @notice Everything the mint page needs in a single RPC call.
     struct MintState {
-        Phase phase;
-        uint256 whitelistPrice;
-        uint256 publicPrice;
-        uint256 whitelistLimit;
-        uint256 publicLimit;
+        bool mintOpen;
+        uint256 price;
+        uint256 walletLimit;
         uint256 totalMinted;
         uint256 maxSupply;
-        uint256 whitelistMintedBy;
-        uint256 publicMintedBy;
+        uint256 mintedBy;
         bool revealed;
         address paymentToken;
         uint256 totalBurned;
@@ -52,11 +40,10 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
     // Errors
     // ---------------------------------------------------------------------
 
-    error PhaseNotActive();
+    error MintClosed();
     error InvalidQuantity();
     error ExceedsMaxSupply();
     error ExceedsWalletLimit();
-    error InvalidProof();
     error MetadataIsFrozen();
     error ZeroAddress();
     error WithdrawFailed();
@@ -69,10 +56,9 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
     // Events
     // ---------------------------------------------------------------------
 
-    event PhaseChanged(Phase phase);
-    event PricesUpdated(uint256 whitelistPrice, uint256 publicPrice);
-    event LimitsUpdated(uint256 whitelistLimit, uint256 publicLimit);
-    event MerkleRootUpdated(bytes32 merkleRoot);
+    event MintOpenChanged(bool open);
+    event PriceUpdated(uint256 price);
+    event WalletLimitUpdated(uint256 walletLimit);
     event Revealed(string baseURI);
     event BaseURIUpdated(string baseURI);
     event UnrevealedURIUpdated(string unrevealedURI);
@@ -99,20 +85,20 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
     /// @notice Total payment tokens burned through minting.
     uint256 public totalBurned;
 
-    Phase public phase;
-    uint256 public whitelistPrice;
-    uint256 public publicPrice;
-    uint256 public whitelistLimit;
-    uint256 public publicLimit;
-    bytes32 public merkleRoot;
+    /// @notice True while anyone can mint.
+    bool public mintOpen;
+    /// @notice Price per NFT in the payment token's smallest unit.
+    uint256 public price;
+    /// @notice Max NFTs one wallet can mint.
+    uint256 public walletLimit;
 
     bool public revealed;
     bool public metadataFrozen;
     string private _baseTokenURI;
     string private _unrevealedURI;
 
-    mapping(address => uint256) public whitelistMinted;
-    mapping(address => uint256) public publicMinted;
+    /// @notice How many NFTs each wallet has minted.
+    mapping(address => uint256) public mintedBy;
 
     // ---------------------------------------------------------------------
     // Constructor
@@ -122,10 +108,8 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
         string memory name_,
         string memory symbol_,
         uint256 maxSupply_,
-        uint256 whitelistPrice_,
-        uint256 publicPrice_,
-        uint256 whitelistLimit_,
-        uint256 publicLimit_,
+        uint256 price_,
+        uint256 walletLimit_,
         string memory unrevealedURI_,
         address royaltyReceiver_,
         uint96 royaltyBps_,
@@ -135,10 +119,8 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
         if (royaltyReceiver_ == address(0)) revert ZeroAddress();
 
         maxSupply = maxSupply_;
-        whitelistPrice = whitelistPrice_;
-        publicPrice = publicPrice_;
-        whitelistLimit = whitelistLimit_;
-        publicLimit = publicLimit_;
+        price = price_;
+        walletLimit = walletLimit_;
         _unrevealedURI = unrevealedURI_;
         _setDefaultRoyalty(royaltyReceiver_, royaltyBps_);
     }
@@ -147,30 +129,16 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
     // Minting
     // ---------------------------------------------------------------------
 
-    /// @notice Mint during the whitelist phase.
-    /// @param quantity Number of tokens to mint.
-    /// @param proof    Merkle proof for msg.sender.
-    /// @dev    The buyer must first approve this contract for `whitelistPrice * quantity` payment tokens.
-    function whitelistMint(uint256 quantity, bytes32[] calldata proof) external nonReentrant {
-        if (phase != Phase.Whitelist) revert PhaseNotActive();
-        if (!isWhitelisted(msg.sender, proof)) revert InvalidProof();
+    /// @notice Public mint, open to everyone while `mintOpen` is true.
+    /// @dev    The buyer must first approve this contract for `price * quantity` payment tokens,
+    ///         which are sent straight to the burn address.
+    function mint(uint256 quantity) external nonReentrant {
+        if (!mintOpen) revert MintClosed();
         _checkQuantity(quantity);
-        if (whitelistMinted[msg.sender] + quantity > whitelistLimit) revert ExceedsWalletLimit();
+        if (mintedBy[msg.sender] + quantity > walletLimit) revert ExceedsWalletLimit();
 
-        whitelistMinted[msg.sender] += quantity;
-        _burnPayment(whitelistPrice * quantity, quantity);
-        _mint(msg.sender, quantity);
-    }
-
-    /// @notice Mint during the public phase.
-    /// @dev    The buyer must first approve this contract for `publicPrice * quantity` payment tokens.
-    function publicMint(uint256 quantity) external nonReentrant {
-        if (phase != Phase.Public) revert PhaseNotActive();
-        _checkQuantity(quantity);
-        if (publicMinted[msg.sender] + quantity > publicLimit) revert ExceedsWalletLimit();
-
-        publicMinted[msg.sender] += quantity;
-        _burnPayment(publicPrice * quantity, quantity);
+        mintedBy[msg.sender] += quantity;
+        _burnPayment(price * quantity, quantity);
         _mint(msg.sender, quantity);
     }
 
@@ -201,25 +169,17 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
     // Views
     // ---------------------------------------------------------------------
 
-    function isWhitelisted(address account, bytes32[] calldata proof) public view returns (bool) {
-        bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(account))));
-        return MerkleProof.verifyCalldata(proof, merkleRoot, leaf);
-    }
-
     function totalMinted() external view returns (uint256) {
         return _totalMinted();
     }
 
     function mintState(address account) external view returns (MintState memory s) {
-        s.phase = phase;
-        s.whitelistPrice = whitelistPrice;
-        s.publicPrice = publicPrice;
-        s.whitelistLimit = whitelistLimit;
-        s.publicLimit = publicLimit;
+        s.mintOpen = mintOpen;
+        s.price = price;
+        s.walletLimit = walletLimit;
         s.totalMinted = _totalMinted();
         s.maxSupply = maxSupply;
-        s.whitelistMintedBy = whitelistMinted[account];
-        s.publicMintedBy = publicMinted[account];
+        s.mintedBy = mintedBy[account];
         s.revealed = revealed;
         s.paymentToken = address(paymentToken);
         s.totalBurned = totalBurned;
@@ -248,9 +208,10 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
     // Owner configuration
     // ---------------------------------------------------------------------
 
-    function setPhase(Phase newPhase) external onlyOwner {
-        phase = newPhase;
-        emit PhaseChanged(newPhase);
+    /// @notice Open or close the public mint.
+    function setMintOpen(bool open) external onlyOwner {
+        mintOpen = open;
+        emit MintOpenChanged(open);
     }
 
     /// @notice Set the ERC-20 used for mint payments (e.g. once the token launches).
@@ -268,22 +229,15 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
         emit PaymentTokenLocked(address(paymentToken));
     }
 
-    /// @notice Prices are in the payment token's smallest unit (e.g. 1_000_000e18 for 1,000,000 tokens).
-    function setPrices(uint256 newWhitelistPrice, uint256 newPublicPrice) external onlyOwner {
-        whitelistPrice = newWhitelistPrice;
-        publicPrice = newPublicPrice;
-        emit PricesUpdated(newWhitelistPrice, newPublicPrice);
+    /// @notice Price per NFT in the payment token's smallest unit (e.g. 1_000_000e18 for 1,000,000 tokens).
+    function setPrice(uint256 newPrice) external onlyOwner {
+        price = newPrice;
+        emit PriceUpdated(newPrice);
     }
 
-    function setLimits(uint256 newWhitelistLimit, uint256 newPublicLimit) external onlyOwner {
-        whitelistLimit = newWhitelistLimit;
-        publicLimit = newPublicLimit;
-        emit LimitsUpdated(newWhitelistLimit, newPublicLimit);
-    }
-
-    function setMerkleRoot(bytes32 newRoot) external onlyOwner {
-        merkleRoot = newRoot;
-        emit MerkleRootUpdated(newRoot);
+    function setWalletLimit(uint256 newLimit) external onlyOwner {
+        walletLimit = newLimit;
+        emit WalletLimitUpdated(newLimit);
     }
 
     function setUnrevealedURI(string calldata newURI) external onlyOwner {

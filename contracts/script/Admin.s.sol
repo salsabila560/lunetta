@@ -8,23 +8,13 @@ import {Lunetta} from "../src/Lunetta.sol";
 ///         On mainnet the owner is a Safe multisig: run the same calls from the
 ///         Safe Transaction Builder instead (see docs/LAUNCH_GUIDE.md).
 ///
-/// forge script script/Admin.s.sol:SetPhase --sig "run(uint8)" 1 --rpc-url base_sepolia --account deployer --broadcast
-contract SetPhase is Script {
-    function run(uint8 phase) external {
+/// forge script script/Admin.s.sol:SetMintOpen --sig "run(bool)" true --rpc-url robinhood --account deployer --broadcast
+contract SetMintOpen is Script {
+    function run(bool open) external {
         Lunetta nft = Lunetta(vm.envAddress("LUNETTA_ADDRESS"));
         vm.broadcast();
-        nft.setPhase(Lunetta.Phase(phase));
-        console2.log("Phase set to", phase);
-    }
-}
-
-/// forge script script/Admin.s.sol:SetMerkleRoot --sig "run(bytes32)" 0x... --rpc-url base_sepolia --account deployer --broadcast
-contract SetMerkleRoot is Script {
-    function run(bytes32 root) external {
-        Lunetta nft = Lunetta(vm.envAddress("LUNETTA_ADDRESS"));
-        vm.broadcast();
-        nft.setMerkleRoot(root);
-        console2.logBytes32(root);
+        nft.setMintOpen(open);
+        console2.log("Mint open:", open);
     }
 }
 

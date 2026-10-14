@@ -1,12 +1,13 @@
 import { BaseError, ContractFunctionRevertedError, UserRejectedRequestError } from "viem";
 
 const CONTRACT_ERRORS: Record<string, string> = {
-  PhaseNotActive: "This mint phase isn't open right now.",
-  InvalidProof: "This wallet isn't on the whitelist.",
+  MintClosed: "The mint isn't open right now.",
+  PaymentTokenNotSet: "Minting opens as soon as the payment token is connected.",
+  ERC20InsufficientBalance: "You don't have enough tokens for this mint.",
+  ERC20InsufficientAllowance: "Approve the tokens first, then mint again.",
   InvalidQuantity: "Choose at least one Lunetta.",
   ExceedsMaxSupply: "Not enough Lunettas left for that amount.",
-  ExceedsWalletLimit: "That would go over your wallet's mint limit for this phase.",
-  IncorrectPayment: "The amount sent doesn't match the price. Refresh and try again.",
+  ExceedsWalletLimit: "That would go over your wallet's mint limit.",
   ReentrancyGuardReentrantCall: "Something went wrong. Try again.",
 };
 
@@ -22,7 +23,7 @@ export function friendlyError(err: unknown): string {
       if (name && CONTRACT_ERRORS[name]) return CONTRACT_ERRORS[name];
     }
     const text = `${err.shortMessage} ${err.details ?? ""}`.toLowerCase();
-    if (text.includes("insufficient funds")) return "Your wallet doesn't have enough ETH for the price plus gas.";
+    if (text.includes("insufficient funds")) return "Your wallet doesn't have enough ETH to pay for gas.";
     if (text.includes("chain mismatch") || text.includes("does not match the target chain")) {
       return "Your wallet is on the wrong network. Switch networks and try again.";
     }

@@ -4,7 +4,7 @@ import { FloatingIsle, LunettaCat, CAT_PALETTES, StarField } from "@/components/
 
 export const metadata: Metadata = {
   title: "Mint",
-  description: "Mint your Lunetta moon-cat. Whitelist and public phases, live supply, and clear pricing.",
+  description: "Mint your Lunetta moon-cat. Public mint, live supply, and every payment burned.",
   alternates: { canonical: "/mint" },
 };
 

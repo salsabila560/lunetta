@@ -9,7 +9,7 @@ This repository contains everything needed to launch the collection:
 | Folder | What it is |
 | --- | --- |
 | `contracts/` | `Lunetta.sol` (ERC-721A), Foundry test suite, deploy and admin scripts |
-| `web/` | Next.js 15 (App Router) site: landing, `/whitelist`, `/mint`, `/gallery`, APIs |
+| `web/` | Next.js 15 (App Router) site: landing, `/play` (Halcyra Live), `/mint`, `/gallery`, `/admin`, APIs |
 | `docs/` | Mainnet launch guide and pre-mainnet security checklist |
 | `.github/workflows/ci.yml` | Runs `forge test` and `next build` on every push |
 
@@ -24,10 +24,9 @@ Default target chain is **Robinhood Chain mainnet** (chain ID 4663; testnet 4663
 `contracts/src/Lunetta.sol`
 
 - **ERC-721A** + `ERC721AQueryable` (cheap batch mints, `tokensOfOwner` for the gallery). Token IDs start at 1.
-- **Phases:** `Closed → Whitelist → Public`, set by the owner.
+- **Single public mint, no whitelist:** the owner opens or closes it with `setMintOpen`.
 - **Paid in the project ERC-20, burned on mint**: `paymentToken` (set/lockable by the owner) is pulled from the buyer straight to `0x…dEaD` in the mint transaction via `SafeERC20`; `totalBurned` tracks the running total. No ETH is accepted for mints.
-- **Per-phase pricing** (`whitelistPrice`, `publicPrice`, in token units) and **per-wallet limits** tracked separately per phase.
-- **Merkle whitelist** in OpenZeppelin `StandardMerkleTree` format (double-hashed leaves; second-preimage safe).
+- **One price** (`price`, in token units) and **one per-wallet limit** (`walletLimit`), both adjustable by the owner.
 - **Max supply** fixed at deploy (`immutable`), enforced on every mint path including `ownerMint`.
 - **Delayed reveal:** every token returns `UNREVEALED_URI` until `reveal("ipfs://CID/")`; then `baseURI + id + ".json"`. `freezeMetadata()` locks it permanently.
 - **ERC-2981 royalties** (default 5%, owner-adjustable).
@@ -37,7 +36,7 @@ Default target chain is **Robinhood Chain mainnet** (chain ID 4663; testnet 4663
 
 ## Quick start (local)
 
-**Requirements:** Node 20.11+, [Foundry](https://book.getfoundry.sh/getting-started/installation), a Postgres database (Neon free tier works), optional Upstash Redis.
+**Requirements:** Node 20.11+, [Foundry](https://book.getfoundry.sh/getting-started/installation), optional Upstash Redis (needed in production for rate limits and the persistent world).
 
 ```bash
 # 1. Contracts
@@ -50,7 +49,6 @@ forge test -vvv            # full suite incl. fuzz tests
 cd ../web
 cp .env.example .env       # fill in values (see table below)
 npm install
-npm run db:migrate         # creates the whitelist table
 npm run dev                # http://localhost:3000
 ```
 
@@ -64,24 +62,12 @@ To try the full mint flow locally, run `anvil` in another terminal, deploy to it
 | `NEXT_PUBLIC_RPC_URL` | public | Use a dedicated RPC (Alchemy / QuickNode / Coinbase CDP) in production |
 | `NEXT_PUBLIC_CONTRACT_ADDRESS` | public | Leave as zero address until deployed — the site shows "opens soon" |
 | `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` | public | From cloud.reown.com, required for WalletConnect wallets |
-| `NEXT_PUBLIC_SITE_URL` | public | Canonical URL; also the domain inside whitelist signatures |
+| `NEXT_PUBLIC_SITE_URL` | public | Canonical URL; also the domain inside agent connect signatures |
 | `NEXT_PUBLIC_IPFS_GATEWAY` | public | e.g. your Pinata dedicated gateway `https://xyz.mypinata.cloud/ipfs/` |
 | `NEXT_PUBLIC_X_URL`, `NEXT_PUBLIC_DISCORD_URL` | public | Footer social links |
 | `NEXT_PUBLIC_PLAY_URL` | public | Empty → "Play" shows a *Soon* badge |
-| `DATABASE_URL` | server | Pooled Postgres URL with `sslmode=require` |
-| `WHITELIST_OPEN` | server | `true` / `false` |
-| `WHITELIST_CLOSES_AT` | server | Optional ISO timestamp for automatic close |
-| `WHITELIST_MAX_SPOTS` | server | Optional cap, `0` = unlimited |
 | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | server | Rate limiting (5 submissions / 10 min / IP). **Required in production** |
 | `IP_HASH_SALT` | server | Random string; IPs are stored only as salted hashes |
-
-## How the whitelist works
-
-1. User connects a wallet on `/whitelist` and signs a plain-text message (free, no transaction). The message includes the site domain, wallet, chain ID and a timestamp.
-2. `POST /api/whitelist` rate-limits by IP, validates input with zod, checks the message is < 10 minutes old and for this domain/chain, verifies the signature with `viem` (works for normal wallets and smart wallets via ERC-1271/6492), then inserts into Postgres (one row per wallet).
-3. When registration closes, run `npm run merkle` → writes `data/whitelist-tree.json` and prints the root.
-4. Commit + redeploy the site (so `/api/proof` serves the new tree), **then** call `setMerkleRoot(root)` on the contract.
-5. On `/mint`, the site fetches the wallet's proof from `/api/proof` and passes it to `whitelistMint`. If the site's root and the on-chain root ever differ, the mint page shows a warning instead of failing silently.
 
 ## Metadata and IPFS
 
@@ -106,8 +92,6 @@ All characters, lore, copy, illustrations (`web/src/components/illustrations.tsx
 | --- | --- | --- |
 | contracts | `forge test -vvv` | Run the test suite |
 | contracts | `forge script script/Deploy.s.sol:Deploy …` | Deploy (+ optional verify) |
-| contracts | `forge script script/Admin.s.sol:SetPhase …` | Owner actions on testnet |
-| web | `npm run db:migrate` | Create DB tables |
-| web | `npm run merkle` | Snapshot whitelist → Merkle tree + root |
+| contracts | `forge script script/Admin.s.sol:SetMintOpen …` | Owner actions on testnet |
 | web | `npm run metadata` | Generate token metadata JSON |
 | web | `npm run abi` | Re-sync ABI after changing the contract |

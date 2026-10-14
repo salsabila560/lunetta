@@ -25,64 +25,23 @@ contract LunettaTest is Test {
 
     address internal owner = makeAddr("owner");
     address internal royalty = makeAddr("royalty");
-    address internal alice = makeAddr("alice"); // whitelisted
-    address internal bob = makeAddr("bob"); // whitelisted
-    address internal carol = makeAddr("carol"); // whitelisted
-    address internal dave = makeAddr("dave"); // whitelisted
-    address internal eve = makeAddr("eve"); // NOT whitelisted
+    address internal alice = makeAddr("alice");
+    address internal bob = makeAddr("bob");
+    address internal carol = makeAddr("carol");
+    address internal dave = makeAddr("dave");
+    address internal eve = makeAddr("eve");
 
     uint256 internal constant MAX_SUPPLY = 20;
-    uint256 internal constant WL_PRICE = 500_000 ether; // 500,000 tokens
     uint256 internal constant PUB_PRICE = 1_000_000 ether; // 1,000,000 tokens
-    uint256 internal constant WL_LIMIT = 2;
     uint256 internal constant PUB_LIMIT = 3;
     uint256 internal constant START_BALANCE = 100_000_000 ether;
     string internal constant HIDDEN = "ipfs://hidden/hidden.json";
 
-    bytes32[4] internal leaves;
-    bytes32 internal root;
-
-    // ------------------------------------------------------------------
-    // Merkle helpers (same leaf format as @openzeppelin/merkle-tree)
-    // ------------------------------------------------------------------
-
-    function _leaf(address a) internal pure returns (bytes32) {
-        return keccak256(bytes.concat(keccak256(abi.encode(a))));
-    }
-
-    function _hashPair(bytes32 a, bytes32 b) internal pure returns (bytes32) {
-        return a < b ? keccak256(abi.encodePacked(a, b)) : keccak256(abi.encodePacked(b, a));
-    }
-
-    /// Tree: root = H( H(l0,l1), H(l2,l3) )
-    function _proof(uint256 i) internal view returns (bytes32[] memory p) {
-        p = new bytes32[](2);
-        if (i == 0) {
-            p[0] = leaves[1];
-            p[1] = _hashPair(leaves[2], leaves[3]);
-        } else if (i == 1) {
-            p[0] = leaves[0];
-            p[1] = _hashPair(leaves[2], leaves[3]);
-        } else if (i == 2) {
-            p[0] = leaves[3];
-            p[1] = _hashPair(leaves[0], leaves[1]);
-        } else {
-            p[0] = leaves[2];
-            p[1] = _hashPair(leaves[0], leaves[1]);
-        }
-    }
-
     function setUp() public {
-        leaves = [_leaf(alice), _leaf(bob), _leaf(carol), _leaf(dave)];
-        root = _hashPair(_hashPair(leaves[0], leaves[1]), _hashPair(leaves[2], leaves[3]));
-
-        nft = new Lunetta(
-            "Lunetta", "LUNA", MAX_SUPPLY, WL_PRICE, PUB_PRICE, WL_LIMIT, PUB_LIMIT, HIDDEN, royalty, 500, owner
-        );
+        nft = new Lunetta("Lunetta", "LUNA", MAX_SUPPLY, PUB_PRICE, PUB_LIMIT, HIDDEN, royalty, 500, owner);
         token = new MockToken();
 
         vm.startPrank(owner);
-        nft.setMerkleRoot(root);
         nft.setPaymentToken(address(token));
         vm.stopPrank();
 
@@ -94,9 +53,9 @@ contract LunettaTest is Test {
         }
     }
 
-    function _open(Lunetta.Phase p) internal {
+    function _open() internal {
         vm.prank(owner);
-        nft.setPhase(p);
+        nft.setMintOpen(true);
     }
 
     // ------------------------------------------------------------------
@@ -108,9 +67,9 @@ contract LunettaTest is Test {
         assertEq(nft.symbol(), "LUNA");
         assertEq(nft.maxSupply(), MAX_SUPPLY);
         assertEq(nft.owner(), owner);
-        assertEq(uint256(nft.phase()), uint256(Lunetta.Phase.Closed));
-        assertEq(nft.whitelistPrice(), WL_PRICE);
-        assertEq(nft.publicPrice(), PUB_PRICE);
+        assertFalse(nft.mintOpen());
+        assertEq(nft.price(), PUB_PRICE);
+        assertEq(nft.walletLimit(), PUB_LIMIT);
         assertEq(nft.totalSupply(), 0);
         assertFalse(nft.revealed());
         assertEq(address(nft.paymentToken()), address(token));
@@ -120,12 +79,12 @@ contract LunettaTest is Test {
 
     function test_RevertWhen_ZeroMaxSupply() public {
         vm.expectRevert(Lunetta.InvalidQuantity.selector);
-        new Lunetta("L", "L", 0, 0, 0, 1, 1, HIDDEN, royalty, 500, owner);
+        new Lunetta("L", "L", 0, 0, 1, HIDDEN, royalty, 500, owner);
     }
 
     function test_RevertWhen_ZeroRoyaltyReceiver() public {
         vm.expectRevert(Lunetta.ZeroAddress.selector);
-        new Lunetta("L", "L", 10, 0, 0, 1, 1, HIDDEN, address(0), 500, owner);
+        new Lunetta("L", "L", 10, 0, 1, HIDDEN, address(0), 500, owner);
     }
 
     // ------------------------------------------------------------------
@@ -133,13 +92,20 @@ contract LunettaTest is Test {
     // ------------------------------------------------------------------
 
     function test_RevertWhen_MintingWhileClosed() public {
-        bytes32[] memory p = _proof(0);
-        vm.startPrank(alice);
-        vm.expectRevert(Lunetta.PhaseNotActive.selector);
-        nft.whitelistMint(1, p);
-        vm.expectRevert(Lunetta.PhaseNotActive.selector);
-        nft.publicMint(1);
-        vm.stopPrank();
+        vm.prank(alice);
+        vm.expectRevert(Lunetta.MintClosed.selector);
+        nft.mint(1);
+    }
+
+    function test_CloseMintAgain() public {
+        _open();
+        vm.prank(alice);
+        nft.mint(1);
+        vm.prank(owner);
+        nft.setMintOpen(false);
+        vm.prank(alice);
+        vm.expectRevert(Lunetta.MintClosed.selector);
+        nft.mint(1);
     }
 
     // ------------------------------------------------------------------
@@ -147,11 +113,11 @@ contract LunettaTest is Test {
     // ------------------------------------------------------------------
 
     function test_PublicMintBurnsTokens() public {
-        _open(Lunetta.Phase.Public);
+        _open();
         vm.expectEmit(address(nft));
         emit Lunetta.TokensBurned(eve, 2, PUB_PRICE * 2);
         vm.prank(eve);
-        nft.publicMint(2);
+        nft.mint(2);
 
         assertEq(nft.balanceOf(eve), 2);
         assertEq(token.balanceOf(eve), START_BALANCE - PUB_PRICE * 2);
@@ -161,39 +127,30 @@ contract LunettaTest is Test {
         assertEq(nft.totalBurned(), PUB_PRICE * 2);
     }
 
-    function test_WhitelistMintBurnsTokens() public {
-        _open(Lunetta.Phase.Whitelist);
-        vm.prank(alice);
-        nft.whitelistMint(2, _proof(0));
-        assertEq(token.balanceOf(DEAD), WL_PRICE * 2);
-        assertEq(token.balanceOf(address(nft)), 0);
-        assertEq(nft.totalBurned(), WL_PRICE * 2);
-    }
-
     function test_TotalBurnedAccumulates() public {
-        _open(Lunetta.Phase.Public);
+        _open();
         vm.prank(eve);
-        nft.publicMint(1);
+        nft.mint(1);
         vm.prank(alice);
-        nft.publicMint(3);
+        nft.mint(3);
         assertEq(nft.totalBurned(), PUB_PRICE * 4);
         assertEq(token.balanceOf(DEAD), PUB_PRICE * 4);
     }
 
     function test_RevertWhen_NotApproved() public {
-        _open(Lunetta.Phase.Public);
+        _open();
         address frank = makeAddr("frank");
         token.mint(frank, START_BALANCE);
         vm.prank(frank);
         vm.expectRevert(
             abi.encodeWithSelector(IERC20Errors.ERC20InsufficientAllowance.selector, address(nft), 0, PUB_PRICE)
         );
-        nft.publicMint(1);
+        nft.mint(1);
         assertEq(nft.balanceOf(frank), 0);
     }
 
     function test_RevertWhen_InsufficientTokenBalance() public {
-        _open(Lunetta.Phase.Public);
+        _open();
         address frank = makeAddr("frank");
         token.mint(frank, PUB_PRICE - 1);
         vm.startPrank(frank);
@@ -201,34 +158,34 @@ contract LunettaTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(IERC20Errors.ERC20InsufficientBalance.selector, frank, PUB_PRICE - 1, PUB_PRICE)
         );
-        nft.publicMint(1);
+        nft.mint(1);
         vm.stopPrank();
     }
 
     function test_RevertWhen_PaymentTokenNotSet() public {
-        Lunetta fresh = new Lunetta("L", "L", 10, 1, 1, 5, 5, HIDDEN, royalty, 500, owner);
+        Lunetta fresh = new Lunetta("L", "L", 10, 1, 5, HIDDEN, royalty, 500, owner);
         vm.prank(owner);
-        fresh.setPhase(Lunetta.Phase.Public);
+        fresh.setMintOpen(true);
         vm.prank(eve);
         vm.expectRevert(Lunetta.PaymentTokenNotSet.selector);
-        fresh.publicMint(1);
+        fresh.mint(1);
     }
 
     function test_FreeMintNeedsNoToken() public {
-        Lunetta fresh = new Lunetta("L", "L", 10, 0, 0, 5, 5, HIDDEN, royalty, 500, owner);
+        Lunetta fresh = new Lunetta("L", "L", 10, 0, 5, HIDDEN, royalty, 500, owner);
         vm.prank(owner);
-        fresh.setPhase(Lunetta.Phase.Public);
+        fresh.setMintOpen(true);
         vm.prank(eve);
-        fresh.publicMint(2);
+        fresh.mint(2);
         assertEq(fresh.balanceOf(eve), 2);
         assertEq(fresh.totalBurned(), 0);
     }
 
     function test_MintDoesNotAcceptEth() public {
-        _open(Lunetta.Phase.Public);
+        _open();
         vm.deal(eve, 1 ether);
         vm.prank(eve);
-        (bool ok,) = address(nft).call{value: 1 ether}(abi.encodeCall(Lunetta.publicMint, (1)));
+        (bool ok,) = address(nft).call{value: 1 ether}(abi.encodeCall(Lunetta.mint, (1)));
         assertFalse(ok);
     }
 
@@ -257,7 +214,7 @@ contract LunettaTest is Test {
     }
 
     function test_RevertWhen_LockWithoutToken() public {
-        Lunetta fresh = new Lunetta("L", "L", 10, 1, 1, 5, 5, HIDDEN, royalty, 500, owner);
+        Lunetta fresh = new Lunetta("L", "L", 10, 1, 5, HIDDEN, royalty, 500, owner);
         vm.prank(owner);
         vm.expectRevert(Lunetta.PaymentTokenNotSet.selector);
         fresh.lockPaymentToken();
@@ -275,124 +232,52 @@ contract LunettaTest is Test {
         qty = bound(qty, 1, PUB_LIMIT);
         price = bound(price, 0, START_BALANCE / PUB_LIMIT);
         vm.prank(owner);
-        nft.setPrices(0, price);
-        _open(Lunetta.Phase.Public);
+        nft.setPrice(price);
+        _open();
         vm.prank(eve);
-        nft.publicMint(qty);
+        nft.mint(qty);
         assertEq(token.balanceOf(DEAD), price * qty);
         assertEq(token.balanceOf(eve), START_BALANCE - price * qty);
         assertEq(nft.balanceOf(eve), qty);
     }
 
     // ------------------------------------------------------------------
-    // Whitelist phase
-    // ------------------------------------------------------------------
-
-    function test_WhitelistMint() public {
-        _open(Lunetta.Phase.Whitelist);
-        vm.prank(alice);
-        nft.whitelistMint(2, _proof(0));
-
-        assertEq(nft.balanceOf(alice), 2);
-        assertEq(nft.ownerOf(1), alice);
-        assertEq(nft.ownerOf(2), alice);
-        assertEq(nft.whitelistMinted(alice), 2);
-    }
-
-    function test_AllWhitelistedAddressesCanMint() public {
-        _open(Lunetta.Phase.Whitelist);
-        address[4] memory wl = [alice, bob, carol, dave];
-        for (uint256 i; i < 4; ++i) {
-            vm.prank(wl[i]);
-            nft.whitelistMint(1, _proof(i));
-            assertEq(nft.balanceOf(wl[i]), 1);
-        }
-    }
-
-    function test_IsWhitelisted() public view {
-        assertTrue(nft.isWhitelisted(alice, _proof(0)));
-        assertFalse(nft.isWhitelisted(eve, _proof(0)));
-        assertFalse(nft.isWhitelisted(bob, _proof(0)));
-    }
-
-    function test_RevertWhen_NotWhitelisted() public {
-        _open(Lunetta.Phase.Whitelist);
-        bytes32[] memory p = _proof(0);
-        vm.prank(eve);
-        vm.expectRevert(Lunetta.InvalidProof.selector);
-        nft.whitelistMint(1, p);
-    }
-
-    function test_RevertWhen_UsingSomeoneElsesProof() public {
-        _open(Lunetta.Phase.Whitelist);
-        bytes32[] memory p = _proof(0); // alice's proof
-        vm.prank(bob);
-        vm.expectRevert(Lunetta.InvalidProof.selector);
-        nft.whitelistMint(1, p);
-    }
-
-    function test_RevertWhen_WhitelistLimitExceeded() public {
-        _open(Lunetta.Phase.Whitelist);
-        bytes32[] memory p = _proof(0);
-        vm.startPrank(alice);
-        nft.whitelistMint(2, p);
-        vm.expectRevert(Lunetta.ExceedsWalletLimit.selector);
-        nft.whitelistMint(1, p);
-        vm.stopPrank();
-    }
-
-    function test_RevertWhen_ZeroQuantity() public {
-        _open(Lunetta.Phase.Whitelist);
-        bytes32[] memory p = _proof(0);
-        vm.prank(alice);
-        vm.expectRevert(Lunetta.InvalidQuantity.selector);
-        nft.whitelistMint(0, p);
-    }
-
-    function test_RevertWhen_WhitelistMintDuringPublic() public {
-        _open(Lunetta.Phase.Public);
-        bytes32[] memory p = _proof(0);
-        vm.prank(alice);
-        vm.expectRevert(Lunetta.PhaseNotActive.selector);
-        nft.whitelistMint(1, p);
-    }
-
-    // ------------------------------------------------------------------
-    // Public phase
+    // Public mint
     // ------------------------------------------------------------------
 
     function test_PublicMint() public {
-        _open(Lunetta.Phase.Public);
+        _open();
         vm.prank(eve);
-        nft.publicMint(3);
+        nft.mint(3);
         assertEq(nft.balanceOf(eve), 3);
-        assertEq(nft.publicMinted(eve), 3);
+        assertEq(nft.mintedBy(eve), 3);
+        assertEq(nft.ownerOf(1), eve);
+        assertEq(nft.ownerOf(3), eve);
     }
 
-    function test_WhitelistAndPublicLimitsAreSeparate() public {
-        _open(Lunetta.Phase.Whitelist);
-        vm.prank(alice);
-        nft.whitelistMint(2, _proof(0));
-
-        _open(Lunetta.Phase.Public);
-        vm.prank(alice);
-        nft.publicMint(3);
-        assertEq(nft.balanceOf(alice), 5);
+    function test_AnyoneCanMint() public {
+        _open();
+        address[5] memory users = [alice, bob, carol, dave, eve];
+        for (uint256 i; i < users.length; ++i) {
+            vm.prank(users[i]);
+            nft.mint(1);
+            assertEq(nft.balanceOf(users[i]), 1);
+        }
     }
 
-    function test_RevertWhen_PublicMintDuringWhitelist() public {
-        _open(Lunetta.Phase.Whitelist);
-        vm.prank(eve);
-        vm.expectRevert(Lunetta.PhaseNotActive.selector);
-        nft.publicMint(1);
+    function test_RevertWhen_ZeroQuantity() public {
+        _open();
+        vm.prank(alice);
+        vm.expectRevert(Lunetta.InvalidQuantity.selector);
+        nft.mint(0);
     }
 
     function test_RevertWhen_PublicLimitExceeded() public {
-        _open(Lunetta.Phase.Public);
+        _open();
         vm.startPrank(eve);
-        nft.publicMint(2);
+        nft.mint(2);
         vm.expectRevert(Lunetta.ExceedsWalletLimit.selector);
-        nft.publicMint(2);
+        nft.mint(2);
         vm.stopPrank();
     }
 
@@ -404,13 +289,13 @@ contract LunettaTest is Test {
         vm.prank(owner);
         nft.ownerMint(owner, MAX_SUPPLY - 1);
 
-        _open(Lunetta.Phase.Public);
+        _open();
         vm.prank(eve);
         vm.expectRevert(Lunetta.ExceedsMaxSupply.selector);
-        nft.publicMint(2);
+        nft.mint(2);
 
         vm.prank(eve);
-        nft.publicMint(1);
+        nft.mint(1);
         assertEq(nft.totalSupply(), MAX_SUPPLY);
     }
 
@@ -448,13 +333,11 @@ contract LunettaTest is Test {
         bytes memory err = abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, eve);
         vm.startPrank(eve);
         vm.expectRevert(err);
-        nft.setPhase(Lunetta.Phase.Public);
+        nft.setMintOpen(true);
         vm.expectRevert(err);
-        nft.setPrices(0, 0);
+        nft.setPrice(0);
         vm.expectRevert(err);
-        nft.setLimits(100, 100);
-        vm.expectRevert(err);
-        nft.setMerkleRoot(bytes32(0));
+        nft.setWalletLimit(100);
         vm.expectRevert(err);
         nft.ownerMint(eve, 1);
         vm.expectRevert(err);
@@ -478,15 +361,11 @@ contract LunettaTest is Test {
 
     function test_AdminSetters() public {
         vm.startPrank(owner);
-        nft.setPrices(1, 2);
-        nft.setLimits(7, 8);
-        nft.setMerkleRoot(bytes32(uint256(1)));
+        nft.setPrice(2);
+        nft.setWalletLimit(8);
         vm.stopPrank();
-        assertEq(nft.whitelistPrice(), 1);
-        assertEq(nft.publicPrice(), 2);
-        assertEq(nft.whitelistLimit(), 7);
-        assertEq(nft.publicLimit(), 8);
-        assertEq(nft.merkleRoot(), bytes32(uint256(1)));
+        assertEq(nft.price(), 2);
+        assertEq(nft.walletLimit(), 8);
     }
 
     function test_TwoStepOwnershipTransfer() public {
@@ -592,13 +471,13 @@ contract LunettaTest is Test {
     // ------------------------------------------------------------------
 
     function test_TokensOfOwnerAndMintState() public {
-        _open(Lunetta.Phase.Whitelist);
+        _open();
         vm.prank(alice);
-        nft.whitelistMint(1, _proof(0));
+        nft.mint(1);
         vm.prank(owner);
         nft.ownerMint(bob, 2);
         vm.prank(alice);
-        nft.whitelistMint(1, _proof(0));
+        nft.mint(1);
 
         uint256[] memory ids = nft.tokensOfOwner(alice);
         assertEq(ids.length, 2);
@@ -606,18 +485,19 @@ contract LunettaTest is Test {
         assertEq(ids[1], 4);
 
         Lunetta.MintState memory s = nft.mintState(alice);
-        assertEq(uint256(s.phase), uint256(Lunetta.Phase.Whitelist));
+        assertTrue(s.mintOpen);
+        assertEq(s.price, PUB_PRICE);
+        assertEq(s.walletLimit, PUB_LIMIT);
         assertEq(s.totalMinted, 4);
         assertEq(s.maxSupply, MAX_SUPPLY);
-        assertEq(s.whitelistMintedBy, 2);
-        assertEq(s.publicMintedBy, 0);
+        assertEq(s.mintedBy, 2);
         assertEq(s.paymentToken, address(token));
-        assertEq(s.totalBurned, WL_PRICE * 2);
+        assertEq(s.totalBurned, PUB_PRICE * 2);
     }
 
-    function test_EmitsPhaseChanged() public {
+    function test_EmitsMintOpenChanged() public {
         vm.expectEmit(address(nft));
-        emit Lunetta.PhaseChanged(Lunetta.Phase.Public);
-        _open(Lunetta.Phase.Public);
+        emit Lunetta.MintOpenChanged(true);
+        _open();
     }
 }

@@ -21,15 +21,12 @@ Tick every box before deploying to mainnet. Anything unticked is a launch blocke
 - [ ] Royalty receiver and withdraw destination are the Safe (or a treasury Safe).
 - [ ] Deployer wallet emptied after deploy.
 
-## Whitelist API and website
+## Website and agent API
 
 - [ ] Upstash Redis configured in production (`UPSTASH_REDIS_REST_*`) — the in-memory fallback is not shared across serverless instances.
-- [ ] Vercel Firewall / bot protection enabled on `/api/whitelist` for extra protection against sybil floods.
-- [ ] `DATABASE_URL` uses TLS and a least-privilege DB user (insert/select on `whitelist_entries` only).
+- [ ] Vercel Firewall / bot protection enabled on `/api/agent/*` for extra protection against floods.
 - [ ] `IP_HASH_SALT` set to a long random value; raw IPs are never stored.
-- [ ] `NEXT_PUBLIC_SITE_URL` equals the production domain (signature messages are bound to it).
-- [ ] WL snapshot reviewed for obvious bot clusters (same `ip_hash`, sequential creation times) before building the tree.
-- [ ] `data/whitelist-tree.json` deployed **before** `setMerkleRoot` is called; mint page shows no "being updated" warning.
+- [ ] `NEXT_PUBLIC_SITE_URL` equals the production domain (agent connect signatures are bound to it).
 - [ ] Dedicated RPC endpoint with rate limits configured (public RPCs throttle on mint day).
 - [ ] Security headers present (check with securityheaders.com); site served over HTTPS only.
 - [ ] Dependencies audited: `npm audit --omit=dev` reviewed; lockfile committed.
@@ -40,6 +37,6 @@ Tick every box before deploying to mainnet. Anything unticked is a launch blocke
 - [ ] Contract address announced only via official channels; pinned in Discord and on X.
 - [ ] Discord hardened: no DMs from server members, verification bot, admins with 2FA, no "support ticket" links to external sites.
 - [ ] Domain registrar and Vercel accounts protected with hardware-key 2FA; DNS lock enabled.
-- [ ] Incident plan written: who can sign `setPhase(0)` on the Safe within minutes, and how you'll communicate.
+- [ ] Incident plan written: who can sign `setMintOpen(false)` on the Safe within minutes, and how you'll communicate.
 - [ ] Metadata and images pinned on at least two IPFS providers before reveal.
-- [ ] Legal review done for your jurisdiction (consumer, securities and tax rules for NFT sales; terms of service and privacy policy for the whitelist data).
+- [ ] Legal review done for your jurisdiction (consumer, securities and tax rules for NFT sales; terms of service and privacy policy).

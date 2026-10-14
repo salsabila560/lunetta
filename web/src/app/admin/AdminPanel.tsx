@@ -8,7 +8,6 @@ import {
   formatUnits,
   getAddress,
   isAddress,
-  isHex,
   parseUnits,
   zeroAddress,
   type Address,
@@ -31,7 +30,6 @@ import { friendlyError } from "@/lib/errors";
 import { lunettaBytecode } from "@/lib/lunetta-bytecode";
 
 const STORAGE_KEY = `lunetta:admin:contract:${chainConfig.chainId}`;
-const PHASES = ["Tutup", "Whitelist", "Publik"] as const;
 const BURN_ADDRESS = "0x000000000000000000000000000000000000dEaD";
 
 /** Accepts "1000000", "1.000.000" or "1,000,000" (thousand separators) and "0.5" / "0,5" (decimals). */
@@ -144,10 +142,8 @@ export function AdminPanel() {
 // ---------------------------------------------------------------- deploy
 
 function DeployCard({ owner, onDeployed }: { owner: Address; onDeployed: (a: Address) => void }) {
-  const [wlPrice, setWlPrice] = useState("1000000");
-  const [pubPrice, setPubPrice] = useState("1000000");
-  const [wlLimit, setWlLimit] = useState("2");
-  const [pubLimit, setPubLimit] = useState("5");
+  const [price, setPrice] = useState("1000000");
+  const [walletLimit, setWalletLimit] = useState("5");
   const [royaltyPct, setRoyaltyPct] = useState("5");
   const [royaltyTo, setRoyaltyTo] = useState<string>(owner);
   const [formError, setFormError] = useState<string | null>(null);
@@ -161,18 +157,16 @@ function DeployCard({ owner, onDeployed }: { owner: Address; onDeployed: (a: Add
     const bps = Math.round(Number(royaltyPct) * 100);
     if (!(bps >= 0 && bps <= 1000)) throw new Error("Royalti harus antara 0 dan 10%.");
     if (!isAddress(royaltyTo)) throw new Error("Alamat penerima royalti tidak valid.");
-    const wl = BigInt(wlLimit);
-    const pub = BigInt(pubLimit);
-    if (wl < 1n || pub < 1n) throw new Error("Batas per wallet minimal 1.");
+    if (!/^\d+$/.test(walletLimit)) throw new Error("Batas per wallet harus angka.");
+    const limit = BigInt(walletLimit);
+    if (limit < 1n) throw new Error("Batas per wallet minimal 1.");
     return [
       "Lunetta",
       "LUNA",
       BigInt(COLLECTION_SIZE),
       // Token belum launch, jadi diasumsikan 18 desimal (standar ERC-20). Bisa diubah setelah token dipasang.
-      parseTokenAmount(wlPrice, 18),
-      parseTokenAmount(pubPrice, 18),
-      wl,
-      pub,
+      parseTokenAmount(price, 18),
+      limit,
       `${window.location.origin}/api/metadata/hidden.json`,
       getAddress(royaltyTo),
       BigInt(bps),
@@ -208,7 +202,7 @@ function DeployCard({ owner, onDeployed }: { owner: Address; onDeployed: (a: Add
       ? encodeAbiParameters(
           [
             { type: "string" }, { type: "string" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" },
-            { type: "uint256" }, { type: "uint256" }, { type: "string" }, { type: "address" }, { type: "uint96" }, { type: "address" },
+            { type: "string" }, { type: "address" }, { type: "uint96" }, { type: "address" },
           ],
           args as never,
         ).slice(2)
@@ -221,10 +215,8 @@ function DeployCard({ owner, onDeployed }: { owner: Address; onDeployed: (a: Add
         Pemilik: <span className="font-mono">{owner}</span>. Supply dikunci {COLLECTION_SIZE} agar cocok dengan koleksi.
       </p>
       <div className="mt-5 grid gap-4 sm:grid-cols-2">
-        <Field label="Harga whitelist (jumlah token)" value={wlPrice} onChange={setWlPrice} />
-        <Field label="Harga publik (jumlah token)" value={pubPrice} onChange={setPubPrice} />
-        <Field label="Batas whitelist / wallet" value={wlLimit} onChange={setWlLimit} />
-        <Field label="Batas publik / wallet" value={pubLimit} onChange={setPubLimit} />
+        <Field label="Harga mint per NFT (jumlah token)" value={price} onChange={setPrice} />
+        <Field label="Batas mint per wallet" value={walletLimit} onChange={setWalletLimit} />
         <Field label="Royalti (%)" value={royaltyPct} onChange={setRoyaltyPct} />
         <Field label="Penerima royalti" value={royaltyTo} onChange={setRoyaltyTo} mono />
       </div>
@@ -269,13 +261,12 @@ function ManageCard({ contract, me }: { contract: Address; me: Address }) {
   const reads = useReadContracts({
     contracts: [
       { ...c, functionName: "owner" },
-      { ...c, functionName: "phase" },
+      { ...c, functionName: "mintOpen" },
       { ...c, functionName: "totalMinted" },
       { ...c, functionName: "maxSupply" },
       { ...c, functionName: "revealed" },
-      { ...c, functionName: "whitelistPrice" },
-      { ...c, functionName: "publicPrice" },
-      { ...c, functionName: "merkleRoot" },
+      { ...c, functionName: "price" },
+      { ...c, functionName: "walletLimit" },
       { ...c, functionName: "pendingOwner" },
       { ...c, functionName: "paymentToken" },
       { ...c, functionName: "paymentTokenLocked" },
@@ -285,7 +276,7 @@ function ManageCard({ contract, me }: { contract: Address; me: Address }) {
   });
   const balance = useBalance({ address: contract, chainId: chainConfig.chainId, query: { refetchInterval: 8_000 } });
 
-  const [owner, phase, minted, max, revealed, wlPrice, pubPrice, root, , payToken, payLocked, burned] = (reads.data ?? []).map(
+  const [owner, mintOpen, minted, max, revealed, price, walletLimit, , payToken, payLocked, burned] = (reads.data ?? []).map(
     (r) => r.result,
   );
   const isOwner = typeof owner === "string" && owner.toLowerCase() === me.toLowerCase();
@@ -331,19 +322,11 @@ function ManageCard({ contract, me }: { contract: Address; me: Address }) {
     }
   }
 
-  const [newWl, setNewWl] = useState("");
-  const [newPub, setNewPub] = useState("");
-  const [rootInput, setRootInput] = useState("");
+  const [newPrice, setNewPrice] = useState("");
+  const [newLimit, setNewLimit] = useState("");
   const [tokenInput, setTokenInput] = useState("");
   const [mintTo, setMintTo] = useState<string>(me);
   const [mintQty, setMintQty] = useState("1");
-
-  useEffect(() => {
-    fetch("/api/proof?address=0x0000000000000000000000000000000000000001")
-      .then((r) => r.json())
-      .then((d: { root?: string | null }) => d.root && setRootInput((v) => v || d.root!))
-      .catch(() => {});
-  }, []);
 
   return (
     <div className="space-y-6">
@@ -356,11 +339,11 @@ function ManageCard({ contract, me }: { contract: Address; me: Address }) {
         </div>
         <p className="mt-1 break-all font-mono text-sm">{contract}</p>
         <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
-          <Stat label="Fase" value={typeof phase === "number" ? PHASES[phase] : "…"} />
+          <Stat label="Mint" value={mintOpen === undefined ? "…" : mintOpen ? "Terbuka (publik)" : "Tutup"} />
           <Stat label="Terjual" value={minted !== undefined && max !== undefined ? `${String(minted)} / ${String(max)}` : "…"} />
           <Stat
-            label="Harga WL / publik"
-            value={typeof wlPrice === "bigint" && typeof pubPrice === "bigint" ? `${fmtTokens(wlPrice, dec)} / ${fmtTokens(pubPrice, dec)} ${sym}` : "…"}
+            label="Harga / batas per wallet"
+            value={typeof price === "bigint" && typeof walletLimit === "bigint" ? `${fmtTokens(price, dec)} ${sym} / ${walletLimit} NFT` : "…"}
           />
           <Stat label="Token pembayaran" value={payToken === undefined ? "…" : tokenSet ? `${sym}${payLocked ? " (terkunci)" : ""}` : "Belum dipasang"} />
           <Stat label="Terbakar lewat mint" value={typeof burned === "bigint" ? `${fmtTokens(burned, dec)} ${sym}` : "…"} />
@@ -410,43 +393,35 @@ function ManageCard({ contract, me }: { contract: Address; me: Address }) {
             </Action>
           )}
 
-          {revealed === true && phase !== 2 && tokenSet && (
+          {revealed === true && mintOpen === false && tokenSet && (
             <Action title="4. Buka mint publik" desc="Setelah ini tombol Mint di website langsung berfungsi untuk semua orang.">
               <button
                 className="btn-lantern w-full"
                 disabled={busy}
-                onClick={() => send(() => writeContractAsync({ ...c, functionName: "setPhase", args: [2] }))}
+                onClick={() => send(() => writeContractAsync({ ...c, functionName: "setMintOpen", args: [true] }))}
               >
                 Buka mint publik
               </button>
             </Action>
           )}
 
-          <Action title="Fase mint" desc="Publik = semua orang bisa mint. Pilih Tutup untuk menghentikan mint kapan saja.">
-            <div className="grid grid-cols-3 gap-2">
-              {PHASES.map((label, i) => (
-                <button
-                  key={label}
-                  className={i === phase ? "btn-lantern !px-3" : "btn-paper !px-3"}
-                  disabled={busy || i === phase}
-                  onClick={() => send(() => writeContractAsync({ ...c, functionName: "setPhase", args: [i] }))}
-                >
-                  {label}
-                </button>
-              ))}
+          <Action title="Buka / tutup mint" desc="Mint publik untuk semua orang, tanpa whitelist. Tutup kapan saja kalau perlu jeda.">
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                className={mintOpen ? "btn-lantern !px-3" : "btn-paper !px-3"}
+                disabled={busy || mintOpen === true}
+                onClick={() => send(() => writeContractAsync({ ...c, functionName: "setMintOpen", args: [true] }))}
+              >
+                Buka
+              </button>
+              <button
+                className={mintOpen === false ? "btn-lantern !px-3" : "btn-paper !px-3"}
+                disabled={busy || mintOpen === false}
+                onClick={() => send(() => writeContractAsync({ ...c, functionName: "setMintOpen", args: [false] }))}
+              >
+                Tutup
+              </button>
             </div>
-          </Action>
-
-          <Action title="Merkle root whitelist" desc="Isi otomatis dari daftar whitelist yang sudah di-build di website.">
-            <input className="field font-mono text-xs" value={rootInput} onChange={(e) => setRootInput(e.target.value.trim())} placeholder="0x…" />
-            <p className="mt-1 break-all text-xs text-ink/60">Saat ini di kontrak: {typeof root === "string" ? root : "…"}</p>
-            <button
-              className="btn-paper mt-3 w-full"
-              disabled={busy || !isHex(rootInput) || rootInput.length !== 66}
-              onClick={() => send(() => writeContractAsync({ ...c, functionName: "setMerkleRoot", args: [rootInput as `0x${string}`] }))}
-            >
-              Simpan root
-            </button>
           </Action>
 
           {tokenSet && !payLocked && (
@@ -480,24 +455,24 @@ function ManageCard({ contract, me }: { contract: Address; me: Address }) {
           )}
 
           <Action title="Ubah harga" desc={`Dalam jumlah ${sym} per NFT (bukan ETH). Semua pembayaran di-burn. Berlaku untuk mint berikutnya.`}>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Whitelist" value={newWl} onChange={setNewWl} placeholder={typeof wlPrice === "bigint" ? formatUnits(wlPrice, dec) : ""} />
-              <Field label="Publik" value={newPub} onChange={setNewPub} placeholder={typeof pubPrice === "bigint" ? formatUnits(pubPrice, dec) : ""} />
-            </div>
+            <Field label="Harga per NFT" value={newPrice} onChange={setNewPrice} placeholder={typeof price === "bigint" ? formatUnits(price, dec) : ""} />
             <button
               className="btn-paper mt-3 w-full"
-              disabled={busy || !newWl || !newPub}
-              onClick={() =>
-                send(() =>
-                  writeContractAsync({
-                    ...c,
-                    functionName: "setPrices",
-                    args: [parseTokenAmount(newWl, dec), parseTokenAmount(newPub, dec)],
-                  }),
-                )
-              }
+              disabled={busy || !newPrice}
+              onClick={() => send(() => writeContractAsync({ ...c, functionName: "setPrice", args: [parseTokenAmount(newPrice, dec)] }))}
             >
               Simpan harga
+            </button>
+          </Action>
+
+          <Action title="Ubah batas per wallet" desc="Jumlah maksimal NFT yang boleh di-mint satu wallet.">
+            <Field label="Batas per wallet" value={newLimit} onChange={setNewLimit} placeholder={typeof walletLimit === "bigint" ? String(walletLimit) : ""} />
+            <button
+              className="btn-paper mt-3 w-full"
+              disabled={busy || !/^\d+$/.test(newLimit) || Number(newLimit) < 1}
+              onClick={() => send(() => writeContractAsync({ ...c, functionName: "setWalletLimit", args: [BigInt(newLimit)] }))}
+            >
+              Simpan batas
             </button>
           </Action>
 

@@ -12,16 +12,13 @@ contract Deploy is Script {
     function run() external returns (Lunetta nft) {
         uint256 maxSupply = vm.envOr("MAX_SUPPLY", uint256(1000));
         // Prices are in the payment token's smallest unit (18 decimals: 1_000_000e18 = 1,000,000 tokens).
-        uint256 wlPrice = vm.envOr("WL_PRICE_UNITS", uint256(1_000_000 ether));
-        uint256 pubPrice = vm.envOr("PUBLIC_PRICE_UNITS", uint256(1_000_000 ether));
+        uint256 price = vm.envOr("PRICE_UNITS", uint256(1_000_000 ether));
         address paymentToken = vm.envOr("PAYMENT_TOKEN", address(0));
-        uint256 wlLimit = vm.envOr("WL_LIMIT", uint256(2));
-        uint256 pubLimit = vm.envOr("PUBLIC_LIMIT", uint256(5));
+        uint256 walletLimit = vm.envOr("WALLET_LIMIT", uint256(5));
         string memory hiddenURI = vm.envString("UNREVEALED_URI");
         address royaltyReceiver = vm.envAddress("ROYALTY_RECEIVER");
         uint96 royaltyBps = uint96(vm.envOr("ROYALTY_BPS", uint256(500)));
         address initialOwner = vm.envAddress("INITIAL_OWNER");
-        bytes32 merkleRoot = vm.envOr("MERKLE_ROOT", bytes32(0));
 
         require(royaltyBps <= 1000, "royalty > 10%");
 
@@ -30,18 +27,15 @@ contract Deploy is Script {
             "Lunetta",
             "LUNA",
             maxSupply,
-            wlPrice,
-            pubPrice,
-            wlLimit,
-            pubLimit,
+            price,
+            walletLimit,
             hiddenURI,
             royaltyReceiver,
             royaltyBps,
-            // Deployer stays owner long enough to set the root; transfer to the
+            // Deployer stays owner long enough to set the token; transfer to the
             // multisig afterwards with script/TransferOwnership.s.sol.
             msg.sender
         );
-        if (merkleRoot != bytes32(0)) nft.setMerkleRoot(merkleRoot);
         if (paymentToken != address(0)) nft.setPaymentToken(paymentToken);
         if (initialOwner != msg.sender) nft.transferOwnership(initialOwner);
         vm.stopBroadcast();
