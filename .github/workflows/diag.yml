@@ -13,11 +13,8 @@ jobs:
           ADDR: "0xdBC844C1D92d99303EEf6Cd853BcF82BBE505E6B"
         run: |
           set +e
-          J=$(curl -s "https://robinhoodchain.blockscout.com/api/v2/addresses/$ADDR/transactions")
-          echo "$J" | head -c 3000
-          H=$(echo "$J" | jq -r '.items[0].hash')
+          H=$(cast block 88288523 --full --json --rpc-url $RPC | jq -r --arg a "$(echo $ADDR | tr A-Z a-z)" '.transactions[] | select((.from|ascii_downcase)==$a) | .hash' | head -1)
           echo "::notice title=hash::$H"
-          echo "$J" | jq -c '.items[] | {hash, status, result, gas_limit, gas_used, gas_price, created_contract: .created_contract.hash, revert_reason, method}' | while read l; do echo "::notice title=tx::$l"; done
           R=$(cast receipt $H --rpc-url $RPC --json)
           echo "::notice title=receipt::$(echo $R | jq -c '{status,gasUsed,cumulativeGasUsed,gasUsedForL1,effectiveGasPrice,contractAddress}')"
           T=$(cast tx $H --rpc-url $RPC --json)
