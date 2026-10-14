@@ -207,6 +207,7 @@ function DeployCard({ owner, onDeployed }: { owner: Address; onDeployed: (a: Add
   const [walletLimit, setWalletLimit] = useState("5");
   const [royaltyPct, setRoyaltyPct] = useState("5");
   const [royaltyTo, setRoyaltyTo] = useState<string>(owner);
+  const [ownerTo, setOwnerTo] = useState<string>(owner);
   const [formError, setFormError] = useState<string | null>(null);
   const [args, setArgs] = useState<readonly unknown[] | null>(null);
 
@@ -222,6 +223,7 @@ function DeployCard({ owner, onDeployed }: { owner: Address; onDeployed: (a: Add
     const bps = Math.round(Number(royaltyPct) * 100);
     if (!(bps >= 0 && bps <= 1000)) throw new Error("Royalti harus antara 0 dan 10%.");
     if (!isAddress(royaltyTo)) throw new Error("Alamat penerima royalti tidak valid.");
+    if (!isAddress(ownerTo)) throw new Error("Alamat pemilik kontrak tidak valid.");
     if (!/^\d+$/.test(walletLimit)) throw new Error("Batas per wallet harus angka.");
     const limit = BigInt(walletLimit);
     if (limit < 1n) throw new Error("Batas per wallet minimal 1.");
@@ -237,7 +239,7 @@ function DeployCard({ owner, onDeployed }: { owner: Address; onDeployed: (a: Add
       `${window.location.origin}/api/metadata/hidden.json`,
       getAddress(royaltyTo),
       BigInt(bps),
-      owner,
+      getAddress(ownerTo),
     ] as const;
   }
 
@@ -295,7 +297,7 @@ function DeployCard({ owner, onDeployed }: { owner: Address; onDeployed: (a: Add
     <Card>
       <h2 className="font-display text-2xl font-bold">1. Deploy kontrak</h2>
       <p className="mt-1 text-sm text-ink/70">
-        Pemilik: <span className="font-mono">{owner}</span>. Supply dikunci {COLLECTION_SIZE} agar cocok dengan koleksi.
+        Wallet pembayar gas: <span className="font-mono">{owner}</span>. Supply dikunci {COLLECTION_SIZE} agar cocok dengan koleksi.
       </p>
       <div className="mt-5 grid gap-4 sm:grid-cols-2">
         <div className="sm:col-span-2">
@@ -305,6 +307,13 @@ function DeployCard({ owner, onDeployed }: { owner: Address; onDeployed: (a: Add
         <Field label="Batas mint per wallet" value={walletLimit} onChange={setWalletLimit} />
         <Field label="Royalti (%)" value={royaltyPct} onChange={setRoyaltyPct} />
         <Field label="Penerima royalti" value={royaltyTo} onChange={setRoyaltyTo} mono />
+        <div className="sm:col-span-2">
+          <Field label="Pemilik kontrak (owner)" value={ownerTo} onChange={setOwnerTo} mono />
+          <p className="mt-1 text-xs text-ink/60">
+            Wallet yang boleh mengelola kontrak di panel ini. Boleh beda dengan wallet yang membayar gas deploy, misalnya deploy pakai
+            MetaMask tapi pemiliknya wallet utama-mu.
+          </p>
+        </div>
       </div>
       <p className="mt-4 rounded-2xl border-2 border-ember bg-ember/15 p-3 text-sm">
         Mint dibayar dengan <b>token proyek</b>, bukan ETH. Setiap token pembayaran langsung dikirim ke alamat burn{" "}
@@ -318,13 +327,14 @@ function DeployCard({ owner, onDeployed }: { owner: Address; onDeployed: (a: Add
         {estimating ? "Menghitung gas…" : isPending ? "Konfirmasi di wallet…" : receipt.isLoading ? "Menunggu blok…" : "Deploy Lunetta"}
       </button>
       <p className="mt-2 text-center text-xs text-ink/60">
-        Batas gas diatur otomatis (sekitar 4–5 juta). Jangan turunkan batas gas di wallet. Biayanya tetap kecil karena harga gas di Robinhood Chain murah.
+        Batas gas diatur otomatis (sekitar 4–5 juta). Deploy butuh gas besar, jadi pakai wallet yang mengikuti batas gas dari website
+        (misalnya MetaMask). Bitget Wallet memaksa batas 1,2 juta, jadi deploy dari Bitget pasti gagal. Biayanya tetap kecil.
       </p>
       {formError && <Status tone="error">{formError}</Status>}
       {error && <Status tone="error">{friendlyError(error)}</Status>}
       {deployFailed && hash && (
         <Status tone="error">
-          Deploy gagal di jaringan (kontrak tidak terbuat). Biasanya karena gas kurang. Coba deploy lagi.{" "}
+          Deploy gagal di jaringan (kontrak tidak terbuat), biasanya karena wallet memotong batas gas. Coba deploy dari MetaMask.{" "}
           <a className="underline" href={explorerTx(hash)} target="_blank" rel="noopener noreferrer">Lihat di explorer</a>
         </Status>
       )}
