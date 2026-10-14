@@ -13,6 +13,13 @@ jobs:
           ADDR: "0xdBC844C1D92d99303EEf6Cd853BcF82BBE505E6B"
         run: |
           set +e
+          J=$(curl -s -A "Mozilla/5.0" "https://robinhoodchain.blockscout.com/api/v2/addresses/$ADDR/transactions")
+          echo "::notice title=api::$(echo "$J" | head -c 300 | tr '\n' ' ')"
+          echo "$J" | jq -c '.items[0:3][] | {hash, status, result, gas_limit, gas_used, gas_price, block_number, created: .created_contract.hash}' | while read l; do echo "::notice title=tx::$l"; done
+          H=$(echo "$J" | jq -r '.items[0].hash')
+          RUN=$(cast run $H --rpc-url $RPC 2>&1 | grep -v "^\s*$" | tail -12 | tr '\n' ' ' | cut -c1-700)
+          echo "::notice title=trace::$RUN"
+          echo "::notice title=txgas::$(cast tx $H gas --rpc-url $RPC) used=$(cast receipt $H gasUsed --rpc-url $RPC) status=$(cast receipt $H status --rpc-url $RPC)"
           echo "::notice title=nonce::$(cast nonce $ADDR --rpc-url $RPC)"
           for N in 3 4; do
             C=$(cast compute-address --nonce $N $ADDR | awk '{print $NF}')
