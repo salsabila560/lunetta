@@ -3,6 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import {
   encodeAbiParameters,
+  encodeDeployData,
   erc20Abi,
   formatEther,
   formatUnits,
@@ -17,6 +18,7 @@ import {
   useAccount,
   useBalance,
   useDeployContract,
+  usePublicClient,
   useReadContracts,
   useSwitchChain,
   useWaitForTransactionReceipt,
@@ -209,8 +211,12 @@ function DeployCard({ owner, onDeployed }: { owner: Address; onDeployed: (a: Add
   const [args, setArgs] = useState<readonly unknown[] | null>(null);
 
   const { deployContractAsync, data: hash, isPending, error, reset } = useDeployContract();
+  const publicClient = usePublicClient({ chainId: chainConfig.chainId });
+  const [estimating, setEstimating] = useState(false);
   const receipt = useWaitForTransactionReceipt({ hash, chainId: chainConfig.chainId });
-  const deployed = receipt.data?.contractAddress ? getAddress(receipt.data.contractAddress) : null;
+  const deployed =
+    receipt.data?.status === "success" && receipt.data.contractAddress ? getAddress(receipt.data.contractAddress) : null;
+  const deployFailed = receipt.data?.status === "reverted" || receipt.isError;
 
   function buildArgs() {
     const bps = Math.round(Number(royaltyPct) * 100);
@@ -246,8 +252,24 @@ function DeployCard({ owner, onDeployed }: { owner: Address; onDeployed: (a: Add
       return;
     }
     setArgs(built);
+    // Some wallets cap gas at ~1.2M on custom chains, which is far below what deploying this
+    // contract needs (~3.5M, mostly for storing the code). Estimate it ourselves and add headroom.
+    let gas = 6_000_000n;
+    setEstimating(true);
     try {
-      await deployContractAsync({ abi: lunettaAbi, bytecode: lunettaBytecode, args: built, chainId: chainConfig.chainId });
+      if (publicClient) {
+        const data = encodeDeployData({ abi: lunettaAbi, bytecode: lunettaBytecode, args: built });
+        const est = await publicClient.estimateGas({ account: owner, data });
+        const padded = (est * 13n) / 10n;
+        gas = padded > 4_500_000n ? padded : 4_500_000n;
+      }
+    } catch {
+      /* fall back to the fixed limit above */
+    } finally {
+      setEstimating(false);
+    }
+    try {
+      await deployContractAsync({ abi: lunettaAbi, bytecode: lunettaBytecode, args: built, chainId: chainConfig.chainId, gas });
     } catch {
       /* shown below */
     }
@@ -292,12 +314,21 @@ function DeployCard({ owner, onDeployed }: { owner: Address; onDeployed: (a: Add
       <p className="mt-3 rounded-2xl border-2 border-ink bg-lantern/30 p-3 text-sm">
         Ini mainnet: gas deploy dibayar dengan ETH sungguhan. Harga dan batas masih bisa diubah nanti.
       </p>
-      <button className="btn-lantern mt-5 w-full" onClick={deploy} disabled={isPending || receipt.isLoading}>
-        {isPending ? "Konfirmasi di wallet…" : receipt.isLoading ? "Menunggu blok…" : "Deploy Lunetta"}
+      <button className="btn-lantern mt-5 w-full" onClick={deploy} disabled={estimating || isPending || receipt.isLoading}>
+        {estimating ? "Menghitung gas…" : isPending ? "Konfirmasi di wallet…" : receipt.isLoading ? "Menunggu blok…" : "Deploy Lunetta"}
       </button>
+      <p className="mt-2 text-center text-xs text-ink/60">
+        Batas gas diatur otomatis (sekitar 4–5 juta). Jangan turunkan batas gas di wallet. Biayanya tetap kecil karena harga gas di Robinhood Chain murah.
+      </p>
       {formError && <Status tone="error">{formError}</Status>}
       {error && <Status tone="error">{friendlyError(error)}</Status>}
-      {hash && !deployed && (
+      {deployFailed && hash && (
+        <Status tone="error">
+          Deploy gagal di jaringan (kontrak tidak terbuat). Biasanya karena gas kurang. Coba deploy lagi.{" "}
+          <a className="underline" href={explorerTx(hash)} target="_blank" rel="noopener noreferrer">Lihat di explorer</a>
+        </Status>
+      )}
+      {hash && !deployed && !deployFailed && (
         <Status tone="info">
           Transaksi terkirim. <a className="underline" href={explorerTx(hash)} target="_blank" rel="noopener noreferrer">Lihat di explorer</a>
         </Status>
