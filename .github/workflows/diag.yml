@@ -17,11 +17,11 @@ jobs:
           const out=[];const log=(s)=>{out.push(s);};
           p.on('console',m=>{ if(m.type()==='error'||m.type()==='warning') log('CONSOLE '+m.type()+' '+m.text().slice(0,250))});
           p.on('pageerror',e=>log('PAGEERR '+e.message.slice(0,250)));
-          p.on('request',r=>{const u=r.url(); if(!u.includes('lunetta.fun')&&!u.includes('fonts')) log('REQ '+r.method()+' '+u.slice(0,90)+' '+(r.postData()||'').slice(0,140))});
-          p.on('response',async r=>{const u=r.url(); if(u.includes('rpc')||u.includes('chain')){let t='';try{t=(await r.text()).slice(0,200)}catch{} log('RES '+r.status()+' '+u.slice(0,60)+' '+t)}});
+          
+          p.on('response',async r=>{const u=r.url(); if(u.includes('rpc')){let t='';try{t=(await r.text())}catch{} if(t.includes('error')) log('RPCERR '+t.slice(0,250))}});
           p.on('requestfailed',r=>log('FAIL '+r.url().slice(0,100)+' '+(r.failure()&&r.failure().errorText)));
-          await p.goto('https://lunetta.fun/mint',{waitUntil:'domcontentloaded'});await p.waitForTimeout(15000);
-          log('TEXT '+(await p.innerText('main')).slice(0,300).replace(/\n/g,' | '));
+          await p.goto('https://lunetta.fun/mint',{waitUntil:'domcontentloaded'});await p.waitForTimeout(15000); await p.screenshot({path:'m.png'});
+          log('TEXT '+(await p.innerText('body')).slice(0,900).replace(/\n/g,' | '));
           for (const l of out.slice(0,40)) console.log('::notice::'+l.replace(/\r?\n/g,' '));
           await b.close();})();
           JS
