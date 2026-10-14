@@ -14,14 +14,11 @@ jobs:
         run: |
           set +e
           A=$(echo $ADDR | tr A-Z a-z)
-          TARGET=$(date -d '2026-10-14 10:46:30 UTC' +%s)
-          LO=88288523; HI=$(cast block-number --rpc-url $RPC)
-          while [ $((HI-LO)) -gt 1 ]; do MID=$(((LO+HI)/2)); TS=$(cast block $MID timestamp --rpc-url $RPC); if [ $TS -lt $TARGET ]; then LO=$MID; else HI=$MID; fi; done
-          echo "::notice title=start::$LO"
+          HI=$(cast block-number --rpc-url $RPC)
           H=""
-          for B in $(seq $LO $((LO+1500))); do
-            R=$(cast rpc eth_getBlockByNumber $(printf '0x%x' $B) true --rpc-url $RPC | jq -r --arg a "$A" '.transactions[] | select((.from|ascii_downcase)==$a) | .hash')
-            if [ -n "$R" ]; then H=$R; echo "::notice title=found::block $B $H"; break; fi
+          for B in $(seq $HI -1 $((HI-4000))); do
+            R=$(cast rpc eth_getBlockByNumber $(printf '0x%x' $B) true --rpc-url $RPC | jq -r --arg a "$A" '.transactions[] | select((.from|ascii_downcase)==$a) | "\(.hash) \(.nonce) \(.gas)"')
+            if [ -n "$R" ]; then echo "::notice title=found::block $B $R"; H=$(echo $R | awk '{print $1}'); break; fi
           done
           RUN=$(cast run $H --rpc-url $RPC 2>&1 | grep -v "^\s*$" | tail -8 | tr '\n' ' ' | cut -c1-600)
           echo "::notice title=trace::$RUN"
