@@ -7,30 +7,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: foundry-rs/foundry-toolchain@v1
-      - name: Check deploy at nonce 3
+      - name: Find Lunetta deploys owned by the Bitget wallet
         env:
           RPC: https://rpc.mainnet.chain.robinhood.com
-          ADDR: "0xdBC844C1D92d99303EEf6Cd853BcF82BBE505E6B"
+          OWNER: "dbc844c1d92d99303eef6cd853bcf82bbe505e6b"
         run: |
           set +e
-          A=$(echo $ADDR | tr A-Z a-z)
           HI=$(cast block-number --rpc-url $RPC)
-          H=""
-          for B in $(seq $HI -1 $((HI-4000))); do
-            R=$(cast rpc eth_getBlockByNumber $(printf '0x%x' $B) true --rpc-url $RPC | jq -r --arg a "$A" '.transactions[] | select((.from|ascii_downcase)==$a) | "\(.hash) \(.nonce) \(.gas)"')
-            if [ -n "$R" ]; then echo "::notice title=found::block $B $R"; H=$(echo $R | awk '{print $1}'); break; fi
+          echo "::notice title=head::$HI"
+          FOUND=0
+          for B in $(seq $HI -1 $((HI-3500))); do
+            cast rpc eth_getBlockByNumber $(printf '0x%x' $B) true --rpc-url $RPC \
+              | jq -r --arg o "$OWNER" '.transactions[] | select(.to==null) | select((.input|ascii_downcase)|contains($o)) | "\(.hash) \(.from) \(.nonce) \(.gas)"' > /tmp/hits
+            while read H F N G; do
+              [ -z "$H" ] && continue
+              FOUND=$((FOUND+1))
+              S=$(cast receipt $H status --rpc-url $RPC); C=$(cast receipt $H contractAddress --rpc-url $RPC); U=$(cast receipt $H gasUsed --rpc-url $RPC)
+              L=$(cast code $C --rpc-url $RPC | wc -c)
+              echo "::notice title=deploy$FOUND::block=$B hash=$H from=$F nonce=$N gaslimit=$G used=$U status=$S contract=$C codelen=$L"
+              if [ "$L" -gt 10 ]; then echo "::notice title=state$FOUND::owner=$(cast call $C 'owner()(address)' --rpc-url $RPC) minted=$(cast call $C 'totalMinted()(uint256)' --rpc-url $RPC) open=$(cast call $C 'mintOpen()(bool)' --rpc-url $RPC) token=$(cast call $C 'paymentToken()(address)' --rpc-url $RPC)"; fi
+            done < /tmp/hits
           done
-          RUN=$(cast run $H --rpc-url $RPC 2>&1 | grep -v "^\s*$" | tail -8 | tr '\n' ' ' | cut -c1-600)
-          echo "::notice title=trace::$RUN"
-          echo "::notice title=txgas::$(cast tx $H gas --rpc-url $RPC) used=$(cast receipt $H gasUsed --rpc-url $RPC) status=$(cast receipt $H status --rpc-url $RPC)"
-          echo "::notice title=nonce::$(cast nonce $ADDR --rpc-url $RPC)"
-          for N in 3 4; do
-            C=$(cast compute-address --nonce $N $ADDR | awk '{print $NF}')
-            L=$(cast code $C --rpc-url $RPC | wc -c)
-            echo "::notice title=nonce$N::$C codelen=$L"
-            if [ "$L" -gt 10 ]; then
-              echo "::notice title=state$N::owner=$(cast call $C 'owner()(address)' --rpc-url $RPC) max=$(cast call $C 'maxSupply()(uint256)' --rpc-url $RPC) open=$(cast call $C 'mintOpen()(bool)' --rpc-url $RPC) tiers=$(cast call $C 'priceTiers()(uint256[],uint256[])' --rpc-url $RPC | tr '\n' ' ')"
-            fi
-          done
-          echo "::notice title=balance::$(cast balance $ADDR --rpc-url $RPC --ether)"
-          echo "::notice title=cors::$(curl -s -o /dev/null -w '%{http_code}' -X OPTIONS -H 'Origin: https://lunetta.fun' -H 'Access-Control-Request-Method: POST' $RPC) $(curl -s -D - -o /dev/null -X POST -H 'Origin: https://lunetta.fun' -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' $RPC | grep -i 'access-control' | tr '\r\n' '  ')"
+          echo "::notice title=total::$FOUND deploy tx found in last 3500 blocks"
