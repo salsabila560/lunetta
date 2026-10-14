@@ -10,9 +10,11 @@ import {Lunetta} from "../src/Lunetta.sol";
 ///   --rpc-url base_sepolia --account deployer --broadcast --verify
 contract Deploy is Script {
     function run() external returns (Lunetta nft) {
-        uint256 maxSupply = vm.envOr("MAX_SUPPLY", uint256(3333));
-        uint256 wlPrice = vm.envOr("WL_PRICE_WEI", uint256(0.002 ether));
-        uint256 pubPrice = vm.envOr("PUBLIC_PRICE_WEI", uint256(0.004 ether));
+        uint256 maxSupply = vm.envOr("MAX_SUPPLY", uint256(1000));
+        // Prices are in the payment token's smallest unit (18 decimals: 1_000_000e18 = 1,000,000 tokens).
+        uint256 wlPrice = vm.envOr("WL_PRICE_UNITS", uint256(1_000_000 ether));
+        uint256 pubPrice = vm.envOr("PUBLIC_PRICE_UNITS", uint256(1_000_000 ether));
+        address paymentToken = vm.envOr("PAYMENT_TOKEN", address(0));
         uint256 wlLimit = vm.envOr("WL_LIMIT", uint256(2));
         uint256 pubLimit = vm.envOr("PUBLIC_LIMIT", uint256(5));
         string memory hiddenURI = vm.envString("UNREVEALED_URI");
@@ -40,6 +42,7 @@ contract Deploy is Script {
             msg.sender
         );
         if (merkleRoot != bytes32(0)) nft.setMerkleRoot(merkleRoot);
+        if (paymentToken != address(0)) nft.setPaymentToken(paymentToken);
         if (initialOwner != msg.sender) nft.transferOwnership(initialOwner);
         vm.stopBroadcast();
 

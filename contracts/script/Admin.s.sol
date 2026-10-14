@@ -46,3 +46,14 @@ contract OwnerMint is Script {
         nft.ownerMint(to, quantity);
     }
 }
+
+/// Set the ERC-20 that mints are paid in (payments are burned to 0x...dEaD).
+/// forge script script/Admin.s.sol:SetPaymentToken --sig "run(address)" 0xToken --rpc-url robinhood --account deployer --broadcast
+contract SetPaymentToken is Script {
+    function run(address token) external {
+        Lunetta nft = Lunetta(vm.envAddress("LUNETTA_ADDRESS"));
+        vm.broadcast();
+        nft.setPaymentToken(token);
+        console2.log("Payment token set to", token);
+    }
+}

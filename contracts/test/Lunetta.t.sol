@@ -5,15 +5,23 @@ import {Test} from "forge-std/Test.sol";
 import {Lunetta} from "../src/Lunetta.sol";
 import {IERC721A} from "erc721a/contracts/IERC721A.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 
-contract RejectEther {
-    receive() external payable {
-        revert("no thanks");
+/// Stand-in for the project's ERC-20 (18 decimals).
+contract MockToken is ERC20 {
+    constructor() ERC20("Mock Lunetta Token", "MLT") {}
+
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
     }
 }
 
 contract LunettaTest is Test {
     Lunetta internal nft;
+    MockToken internal token;
+
+    address internal constant DEAD = 0x000000000000000000000000000000000000dEaD;
 
     address internal owner = makeAddr("owner");
     address internal royalty = makeAddr("royalty");
@@ -24,10 +32,11 @@ contract LunettaTest is Test {
     address internal eve = makeAddr("eve"); // NOT whitelisted
 
     uint256 internal constant MAX_SUPPLY = 20;
-    uint256 internal constant WL_PRICE = 0.002 ether;
-    uint256 internal constant PUB_PRICE = 0.004 ether;
+    uint256 internal constant WL_PRICE = 500_000 ether; // 500,000 tokens
+    uint256 internal constant PUB_PRICE = 1_000_000 ether; // 1,000,000 tokens
     uint256 internal constant WL_LIMIT = 2;
     uint256 internal constant PUB_LIMIT = 3;
+    uint256 internal constant START_BALANCE = 100_000_000 ether;
     string internal constant HIDDEN = "ipfs://hidden/hidden.json";
 
     bytes32[4] internal leaves;
@@ -70,13 +79,18 @@ contract LunettaTest is Test {
         nft = new Lunetta(
             "Lunetta", "LUNA", MAX_SUPPLY, WL_PRICE, PUB_PRICE, WL_LIMIT, PUB_LIMIT, HIDDEN, royalty, 500, owner
         );
+        token = new MockToken();
 
-        vm.prank(owner);
+        vm.startPrank(owner);
         nft.setMerkleRoot(root);
+        nft.setPaymentToken(address(token));
+        vm.stopPrank();
 
         address[5] memory users = [alice, bob, carol, dave, eve];
         for (uint256 i; i < users.length; ++i) {
-            vm.deal(users[i], 10 ether);
+            token.mint(users[i], START_BALANCE);
+            vm.prank(users[i]);
+            token.approve(address(nft), type(uint256).max);
         }
     }
 
@@ -99,6 +113,9 @@ contract LunettaTest is Test {
         assertEq(nft.publicPrice(), PUB_PRICE);
         assertEq(nft.totalSupply(), 0);
         assertFalse(nft.revealed());
+        assertEq(address(nft.paymentToken()), address(token));
+        assertEq(nft.BURN_ADDRESS(), DEAD);
+        assertEq(nft.totalBurned(), 0);
     }
 
     function test_RevertWhen_ZeroMaxSupply() public {
@@ -119,10 +136,152 @@ contract LunettaTest is Test {
         bytes32[] memory p = _proof(0);
         vm.startPrank(alice);
         vm.expectRevert(Lunetta.PhaseNotActive.selector);
-        nft.whitelistMint{value: WL_PRICE}(1, p);
+        nft.whitelistMint(1, p);
         vm.expectRevert(Lunetta.PhaseNotActive.selector);
-        nft.publicMint{value: PUB_PRICE}(1);
+        nft.publicMint(1);
         vm.stopPrank();
+    }
+
+    // ------------------------------------------------------------------
+    // Token payment & burn
+    // ------------------------------------------------------------------
+
+    function test_PublicMintBurnsTokens() public {
+        _open(Lunetta.Phase.Public);
+        vm.expectEmit(address(nft));
+        emit Lunetta.TokensBurned(eve, 2, PUB_PRICE * 2);
+        vm.prank(eve);
+        nft.publicMint(2);
+
+        assertEq(nft.balanceOf(eve), 2);
+        assertEq(token.balanceOf(eve), START_BALANCE - PUB_PRICE * 2);
+        assertEq(token.balanceOf(DEAD), PUB_PRICE * 2);
+        assertEq(token.balanceOf(address(nft)), 0, "contract never holds payments");
+        assertEq(token.balanceOf(owner), 0, "owner never receives payments");
+        assertEq(nft.totalBurned(), PUB_PRICE * 2);
+    }
+
+    function test_WhitelistMintBurnsTokens() public {
+        _open(Lunetta.Phase.Whitelist);
+        vm.prank(alice);
+        nft.whitelistMint(2, _proof(0));
+        assertEq(token.balanceOf(DEAD), WL_PRICE * 2);
+        assertEq(token.balanceOf(address(nft)), 0);
+        assertEq(nft.totalBurned(), WL_PRICE * 2);
+    }
+
+    function test_TotalBurnedAccumulates() public {
+        _open(Lunetta.Phase.Public);
+        vm.prank(eve);
+        nft.publicMint(1);
+        vm.prank(alice);
+        nft.publicMint(3);
+        assertEq(nft.totalBurned(), PUB_PRICE * 4);
+        assertEq(token.balanceOf(DEAD), PUB_PRICE * 4);
+    }
+
+    function test_RevertWhen_NotApproved() public {
+        _open(Lunetta.Phase.Public);
+        address frank = makeAddr("frank");
+        token.mint(frank, START_BALANCE);
+        vm.prank(frank);
+        vm.expectRevert(
+            abi.encodeWithSelector(IERC20Errors.ERC20InsufficientAllowance.selector, address(nft), 0, PUB_PRICE)
+        );
+        nft.publicMint(1);
+        assertEq(nft.balanceOf(frank), 0);
+    }
+
+    function test_RevertWhen_InsufficientTokenBalance() public {
+        _open(Lunetta.Phase.Public);
+        address frank = makeAddr("frank");
+        token.mint(frank, PUB_PRICE - 1);
+        vm.startPrank(frank);
+        token.approve(address(nft), type(uint256).max);
+        vm.expectRevert(
+            abi.encodeWithSelector(IERC20Errors.ERC20InsufficientBalance.selector, frank, PUB_PRICE - 1, PUB_PRICE)
+        );
+        nft.publicMint(1);
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_PaymentTokenNotSet() public {
+        Lunetta fresh = new Lunetta("L", "L", 10, 1, 1, 5, 5, HIDDEN, royalty, 500, owner);
+        vm.prank(owner);
+        fresh.setPhase(Lunetta.Phase.Public);
+        vm.prank(eve);
+        vm.expectRevert(Lunetta.PaymentTokenNotSet.selector);
+        fresh.publicMint(1);
+    }
+
+    function test_FreeMintNeedsNoToken() public {
+        Lunetta fresh = new Lunetta("L", "L", 10, 0, 0, 5, 5, HIDDEN, royalty, 500, owner);
+        vm.prank(owner);
+        fresh.setPhase(Lunetta.Phase.Public);
+        vm.prank(eve);
+        fresh.publicMint(2);
+        assertEq(fresh.balanceOf(eve), 2);
+        assertEq(fresh.totalBurned(), 0);
+    }
+
+    function test_MintDoesNotAcceptEth() public {
+        _open(Lunetta.Phase.Public);
+        vm.deal(eve, 1 ether);
+        vm.prank(eve);
+        (bool ok,) = address(nft).call{value: 1 ether}(abi.encodeCall(Lunetta.publicMint, (1)));
+        assertFalse(ok);
+    }
+
+    function test_SetPaymentToken() public {
+        MockToken other = new MockToken();
+        vm.expectEmit(address(nft));
+        emit Lunetta.PaymentTokenUpdated(address(other));
+        vm.prank(owner);
+        nft.setPaymentToken(address(other));
+        assertEq(address(nft.paymentToken()), address(other));
+    }
+
+    function test_RevertWhen_SetPaymentTokenZero() public {
+        vm.prank(owner);
+        vm.expectRevert(Lunetta.ZeroAddress.selector);
+        nft.setPaymentToken(address(0));
+    }
+
+    function test_LockPaymentToken() public {
+        vm.startPrank(owner);
+        nft.lockPaymentToken();
+        assertTrue(nft.paymentTokenLocked());
+        vm.expectRevert(Lunetta.PaymentTokenIsLocked.selector);
+        nft.setPaymentToken(address(0xBEEF));
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_LockWithoutToken() public {
+        Lunetta fresh = new Lunetta("L", "L", 10, 1, 1, 5, 5, HIDDEN, royalty, 500, owner);
+        vm.prank(owner);
+        vm.expectRevert(Lunetta.PaymentTokenNotSet.selector);
+        fresh.lockPaymentToken();
+    }
+
+    function test_RescueERC20() public {
+        MockToken stray = new MockToken();
+        stray.mint(address(nft), 42 ether);
+        vm.prank(owner);
+        nft.rescueERC20(address(stray), owner, 42 ether);
+        assertEq(stray.balanceOf(owner), 42 ether);
+    }
+
+    function testFuzz_BurnEqualsPriceTimesQuantity(uint256 qty, uint256 price) public {
+        qty = bound(qty, 1, PUB_LIMIT);
+        price = bound(price, 0, START_BALANCE / PUB_LIMIT);
+        vm.prank(owner);
+        nft.setPrices(0, price);
+        _open(Lunetta.Phase.Public);
+        vm.prank(eve);
+        nft.publicMint(qty);
+        assertEq(token.balanceOf(DEAD), price * qty);
+        assertEq(token.balanceOf(eve), START_BALANCE - price * qty);
+        assertEq(nft.balanceOf(eve), qty);
     }
 
     // ------------------------------------------------------------------
@@ -132,13 +291,12 @@ contract LunettaTest is Test {
     function test_WhitelistMint() public {
         _open(Lunetta.Phase.Whitelist);
         vm.prank(alice);
-        nft.whitelistMint{value: WL_PRICE * 2}(2, _proof(0));
+        nft.whitelistMint(2, _proof(0));
 
         assertEq(nft.balanceOf(alice), 2);
         assertEq(nft.ownerOf(1), alice);
         assertEq(nft.ownerOf(2), alice);
         assertEq(nft.whitelistMinted(alice), 2);
-        assertEq(address(nft).balance, WL_PRICE * 2);
     }
 
     function test_AllWhitelistedAddressesCanMint() public {
@@ -146,7 +304,7 @@ contract LunettaTest is Test {
         address[4] memory wl = [alice, bob, carol, dave];
         for (uint256 i; i < 4; ++i) {
             vm.prank(wl[i]);
-            nft.whitelistMint{value: WL_PRICE}(1, _proof(i));
+            nft.whitelistMint(1, _proof(i));
             assertEq(nft.balanceOf(wl[i]), 1);
         }
     }
@@ -162,7 +320,7 @@ contract LunettaTest is Test {
         bytes32[] memory p = _proof(0);
         vm.prank(eve);
         vm.expectRevert(Lunetta.InvalidProof.selector);
-        nft.whitelistMint{value: WL_PRICE}(1, p);
+        nft.whitelistMint(1, p);
     }
 
     function test_RevertWhen_UsingSomeoneElsesProof() public {
@@ -170,33 +328,17 @@ contract LunettaTest is Test {
         bytes32[] memory p = _proof(0); // alice's proof
         vm.prank(bob);
         vm.expectRevert(Lunetta.InvalidProof.selector);
-        nft.whitelistMint{value: WL_PRICE}(1, p);
+        nft.whitelistMint(1, p);
     }
 
     function test_RevertWhen_WhitelistLimitExceeded() public {
         _open(Lunetta.Phase.Whitelist);
         bytes32[] memory p = _proof(0);
         vm.startPrank(alice);
-        nft.whitelistMint{value: WL_PRICE * 2}(2, p);
+        nft.whitelistMint(2, p);
         vm.expectRevert(Lunetta.ExceedsWalletLimit.selector);
-        nft.whitelistMint{value: WL_PRICE}(1, p);
+        nft.whitelistMint(1, p);
         vm.stopPrank();
-    }
-
-    function test_RevertWhen_WhitelistUnderpaid() public {
-        _open(Lunetta.Phase.Whitelist);
-        bytes32[] memory p = _proof(0);
-        vm.prank(alice);
-        vm.expectRevert(Lunetta.IncorrectPayment.selector);
-        nft.whitelistMint{value: WL_PRICE}(2, p);
-    }
-
-    function test_RevertWhen_WhitelistOverpaid() public {
-        _open(Lunetta.Phase.Whitelist);
-        bytes32[] memory p = _proof(0);
-        vm.prank(alice);
-        vm.expectRevert(Lunetta.IncorrectPayment.selector);
-        nft.whitelistMint{value: WL_PRICE * 3}(2, p);
     }
 
     function test_RevertWhen_ZeroQuantity() public {
@@ -212,7 +354,7 @@ contract LunettaTest is Test {
         bytes32[] memory p = _proof(0);
         vm.prank(alice);
         vm.expectRevert(Lunetta.PhaseNotActive.selector);
-        nft.whitelistMint{value: WL_PRICE}(1, p);
+        nft.whitelistMint(1, p);
     }
 
     // ------------------------------------------------------------------
@@ -222,7 +364,7 @@ contract LunettaTest is Test {
     function test_PublicMint() public {
         _open(Lunetta.Phase.Public);
         vm.prank(eve);
-        nft.publicMint{value: PUB_PRICE * 3}(3);
+        nft.publicMint(3);
         assertEq(nft.balanceOf(eve), 3);
         assertEq(nft.publicMinted(eve), 3);
     }
@@ -230,11 +372,11 @@ contract LunettaTest is Test {
     function test_WhitelistAndPublicLimitsAreSeparate() public {
         _open(Lunetta.Phase.Whitelist);
         vm.prank(alice);
-        nft.whitelistMint{value: WL_PRICE * 2}(2, _proof(0));
+        nft.whitelistMint(2, _proof(0));
 
         _open(Lunetta.Phase.Public);
         vm.prank(alice);
-        nft.publicMint{value: PUB_PRICE * 3}(3);
+        nft.publicMint(3);
         assertEq(nft.balanceOf(alice), 5);
     }
 
@@ -242,37 +384,16 @@ contract LunettaTest is Test {
         _open(Lunetta.Phase.Whitelist);
         vm.prank(eve);
         vm.expectRevert(Lunetta.PhaseNotActive.selector);
-        nft.publicMint{value: PUB_PRICE}(1);
+        nft.publicMint(1);
     }
 
     function test_RevertWhen_PublicLimitExceeded() public {
         _open(Lunetta.Phase.Public);
         vm.startPrank(eve);
-        nft.publicMint{value: PUB_PRICE * 2}(2);
+        nft.publicMint(2);
         vm.expectRevert(Lunetta.ExceedsWalletLimit.selector);
-        nft.publicMint{value: PUB_PRICE * 2}(2);
+        nft.publicMint(2);
         vm.stopPrank();
-    }
-
-    function test_RevertWhen_PublicWrongPayment() public {
-        _open(Lunetta.Phase.Public);
-        vm.prank(eve);
-        vm.expectRevert(Lunetta.IncorrectPayment.selector);
-        nft.publicMint{value: WL_PRICE}(1);
-    }
-
-    function testFuzz_PublicMintPayment(uint256 qty, uint256 paid) public {
-        qty = bound(qty, 1, PUB_LIMIT);
-        paid = bound(paid, 0, 1 ether);
-        _open(Lunetta.Phase.Public);
-        vm.prank(eve);
-        if (paid != PUB_PRICE * qty) {
-            vm.expectRevert(Lunetta.IncorrectPayment.selector);
-            nft.publicMint{value: paid}(qty);
-        } else {
-            nft.publicMint{value: paid}(qty);
-            assertEq(nft.balanceOf(eve), qty);
-        }
     }
 
     // ------------------------------------------------------------------
@@ -286,10 +407,10 @@ contract LunettaTest is Test {
         _open(Lunetta.Phase.Public);
         vm.prank(eve);
         vm.expectRevert(Lunetta.ExceedsMaxSupply.selector);
-        nft.publicMint{value: PUB_PRICE * 2}(2);
+        nft.publicMint(2);
 
         vm.prank(eve);
-        nft.publicMint{value: PUB_PRICE}(1);
+        nft.publicMint(1);
         assertEq(nft.totalSupply(), MAX_SUPPLY);
     }
 
@@ -314,6 +435,7 @@ contract LunettaTest is Test {
         vm.prank(owner);
         nft.ownerMint(carol, 5);
         assertEq(nft.balanceOf(carol), 5);
+        assertEq(nft.totalBurned(), 0, "team mint burns nothing");
     }
 
     function test_RevertWhen_OwnerMintToZero() public {
@@ -345,6 +467,12 @@ contract LunettaTest is Test {
         nft.setDefaultRoyalty(eve, 1000);
         vm.expectRevert(err);
         nft.withdraw(payable(eve));
+        vm.expectRevert(err);
+        nft.setPaymentToken(address(token));
+        vm.expectRevert(err);
+        nft.lockPaymentToken();
+        vm.expectRevert(err);
+        nft.rescueERC20(address(token), eve, 1);
         vm.stopPrank();
     }
 
@@ -442,20 +570,8 @@ contract LunettaTest is Test {
     }
 
     // ------------------------------------------------------------------
-    // Withdraw
+    // Withdraw (only for ETH force-sent by mistake)
     // ------------------------------------------------------------------
-
-    function test_Withdraw() public {
-        _open(Lunetta.Phase.Public);
-        vm.prank(eve);
-        nft.publicMint{value: PUB_PRICE * 3}(3);
-
-        address treasury = makeAddr("treasury");
-        vm.prank(owner);
-        nft.withdraw(payable(treasury));
-        assertEq(treasury.balance, PUB_PRICE * 3);
-        assertEq(address(nft).balance, 0);
-    }
 
     function test_RevertWhen_WithdrawNothing() public {
         vm.prank(owner);
@@ -463,15 +579,12 @@ contract LunettaTest is Test {
         nft.withdraw(payable(owner));
     }
 
-    function test_RevertWhen_WithdrawRecipientRejects() public {
-        _open(Lunetta.Phase.Public);
-        vm.prank(eve);
-        nft.publicMint{value: PUB_PRICE}(1);
-
-        RejectEther rejecter = new RejectEther();
+    function test_WithdrawForcedEth() public {
+        vm.deal(address(nft), 1 ether);
+        address treasury = makeAddr("treasury");
         vm.prank(owner);
-        vm.expectRevert(Lunetta.WithdrawFailed.selector);
-        nft.withdraw(payable(address(rejecter)));
+        nft.withdraw(payable(treasury));
+        assertEq(treasury.balance, 1 ether);
     }
 
     // ------------------------------------------------------------------
@@ -481,11 +594,11 @@ contract LunettaTest is Test {
     function test_TokensOfOwnerAndMintState() public {
         _open(Lunetta.Phase.Whitelist);
         vm.prank(alice);
-        nft.whitelistMint{value: WL_PRICE}(1, _proof(0));
+        nft.whitelistMint(1, _proof(0));
         vm.prank(owner);
         nft.ownerMint(bob, 2);
         vm.prank(alice);
-        nft.whitelistMint{value: WL_PRICE}(1, _proof(0));
+        nft.whitelistMint(1, _proof(0));
 
         uint256[] memory ids = nft.tokensOfOwner(alice);
         assertEq(ids.length, 2);
@@ -498,6 +611,8 @@ contract LunettaTest is Test {
         assertEq(s.maxSupply, MAX_SUPPLY);
         assertEq(s.whitelistMintedBy, 2);
         assertEq(s.publicMintedBy, 0);
+        assertEq(s.paymentToken, address(token));
+        assertEq(s.totalBurned, WL_PRICE * 2);
     }
 
     function test_EmitsPhaseChanged() public {

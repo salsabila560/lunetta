@@ -4,13 +4,16 @@
 
 The site ships with an owner panel at **`/admin`** that deploys and manages the contract straight from your wallet. Default network: **Robinhood Chain mainnet** (chain ID 4663, RPC `https://rpc.mainnet.chain.robinhood.com`, explorer `https://robinhoodchain.blockscout.com`). Use chain ID 46630 (`NEXT_PUBLIC_CHAIN_ID`) to rehearse on Robinhood Chain Testnet first.
 
+**Payment model:** mints are paid in the project's ERC-20 token, not ETH (default price 1,000,000 tokens per NFT). Every payment is transferred from the buyer straight to the burn address `0x000000000000000000000000000000000000dEaD` inside the mint transaction, so the contract and the owner never hold mint proceeds. Buyers still need a little ETH for gas, and approve the token once before minting (the mint page does both steps).
+
 1. Open `https://<your-site>/admin` in your wallet's in-app browser (MetaMask, Rainbow, Coinbase Wallet). Have a little ETH on Robinhood Chain for gas.
-2. Connect, check prices/limits, tap **Deploy Lunetta**, confirm in the wallet. The panel shows the contract address and the constructor arguments.
-3. Tap **Sambungkan metadata** (reveal). This points `tokenURI` at `/api/metadata/`; each token's art stays hidden until that token is minted, so rarities can't be sniped.
-4. Make the public site use the contract: commit the address into `web/data/deployment.json` (or set `NEXT_PUBLIC_CONTRACT_ADDRESS` in Vercel) and redeploy.
-5. Verify on Blockscout: *Verify & Publish → Solidity (Standard JSON input)*, compiler `v0.8.26+commit.8a97fa7a`, upload `contracts/verification/Lunetta.standard-input.json`, contract `src/Lunetta.sol:Lunetta`, paste the constructor arguments shown in the panel.
-6. When ready: **Fase → Publik** (or Whitelist after setting the Merkle root). Withdraw from the same panel.
-7. Transfer ownership to a multisig once the mint is running smoothly (see below).
+2. Connect, check prices (in tokens) and limits, tap **Deploy Lunetta**, confirm in the wallet. The panel shows the contract address and the constructor arguments. Prices assume an 18-decimal token; adjust them later from the panel if your token differs.
+3. **Pasang token pembayaran** (`setPaymentToken`): paste the ERC-20 address once the token is live. Minting can't start before this (unless the price is 0). When you're sure it's right, tap **Kunci token** (`lockPaymentToken`) so holders know it can never be swapped.
+4. Tap **Sambungkan metadata** (reveal). This points `tokenURI` at `/api/metadata/`; each token's art stays hidden until that token is minted, so rarities can't be sniped.
+5. Make the public site use the contract: commit the address into `web/data/deployment.json` (or set `NEXT_PUBLIC_CONTRACT_ADDRESS` in Vercel) and redeploy.
+6. Verify on Blockscout: *Verify & Publish → Solidity (Standard JSON input)*, compiler `v0.8.26+commit.8a97fa7a`, upload `contracts/verification/Lunetta.standard-input.json`, contract `src/Lunetta.sol:Lunetta`, paste the constructor arguments shown in the panel.
+7. When ready: **Buka mint publik** (or Whitelist after setting the Merkle root). Do one test mint yourself and check the burn on the explorer (`TokensBurned` event, balance of `0x…dEaD`).
+8. Transfer ownership to a multisig once the mint is running smoothly (see below).
 
 The rest of this guide covers the Foundry/CLI route.
 

@@ -3,8 +3,17 @@
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
-import { formatEther, zeroAddress, type Hex } from "viem";
-import { useAccount, useBalance, useReadContract, useSwitchChain, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
+import { erc20Abi, formatUnits, zeroAddress, type Hex } from "viem";
+import {
+  useAccount,
+  useBalance,
+  usePublicClient,
+  useReadContract,
+  useReadContracts,
+  useSwitchChain,
+  useWaitForTransactionReceipt,
+  useWriteContract,
+} from "wagmi";
 import { WalletButton } from "@/components/WalletButton";
 import { lunettaAbi } from "@/lib/abi";
 import { chainConfig, explorerTx } from "@/lib/config";
@@ -13,9 +22,9 @@ import { lunettaContract } from "@/lib/wagmi";
 
 const PHASES = ["Closed", "Whitelist", "Public"] as const;
 
-function formatEth(wei: bigint) {
-  const n = Number(formatEther(wei));
-  return n.toLocaleString(undefined, { maximumFractionDigits: 5 });
+function formatAmount(units: bigint, decimals: number) {
+  const n = Number(formatUnits(units, decimals));
+  return n.toLocaleString(undefined, { maximumFractionDigits: n >= 1000 ? 0 : 4 });
 }
 
 export function MintPanel() {
@@ -52,15 +61,40 @@ export function MintPanel() {
     },
   });
 
-  const balance = useBalance({ address, chainId: chainConfig.chainId, query: { enabled: Boolean(address) } });
+  // Gas is still paid in ETH; the mint itself is paid in the project token, which is burned.
+  const gasBalance = useBalance({ address, chainId: chainConfig.chainId, query: { enabled: Boolean(address) } });
 
+  const tokenAddress = s && s.paymentToken !== zeroAddress ? s.paymentToken : undefined;
+  const tokenInfo = useReadContracts({
+    allowFailure: false,
+    contracts: [
+      { address: tokenAddress ?? zeroAddress, abi: erc20Abi, functionName: "symbol", chainId: chainConfig.chainId },
+      { address: tokenAddress ?? zeroAddress, abi: erc20Abi, functionName: "decimals", chainId: chainConfig.chainId },
+      { address: tokenAddress ?? zeroAddress, abi: erc20Abi, functionName: "balanceOf", args: [address ?? zeroAddress], chainId: chainConfig.chainId },
+      {
+        address: tokenAddress ?? zeroAddress,
+        abi: erc20Abi,
+        functionName: "allowance",
+        args: [address ?? zeroAddress, lunettaContract.address],
+        chainId: chainConfig.chainId,
+      },
+    ],
+    query: { enabled: Boolean(tokenAddress), refetchInterval: 8_000 },
+  });
+  const [symbol, decimals, tokenBalance, allowance] = tokenAddress && tokenInfo.data ? tokenInfo.data : [undefined, undefined, undefined, undefined];
+  const dec = decimals ?? 18;
+  const sym = symbol ?? "tokens";
+
+  const publicClient = usePublicClient({ chainId: chainConfig.chainId });
+  const [step, setStep] = useState<"idle" | "approving" | "minting">("idle");
   const { writeContractAsync, data: txHash, isPending: confirmingInWallet, reset } = useWriteContract();
   const receipt = useWaitForTransactionReceipt({ hash: txHash, chainId: chainConfig.chainId });
 
   useEffect(() => {
     if (receipt.isSuccess) {
       state.refetch();
-      balance.refetch();
+      gasBalance.refetch();
+      tokenInfo.refetch();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [receipt.isSuccess]);
@@ -86,26 +120,49 @@ export function MintPanel() {
   const rootMismatch =
     phase === 1 && proof.data?.root && onchainRoot.data && proof.data.root.toLowerCase() !== onchainRoot.data.toLowerCase();
 
+  const needsToken = total > 0n;
+  const needsApproval = needsToken && (allowance ?? 0n) < total;
+
   async function mint() {
     setLocalError(null);
     reset();
     if (!derived || !address) return;
-    if (balance.data && balance.data.value < total) {
-      setLocalError("Your wallet doesn't have enough ETH for this mint.");
+    if (needsToken && !tokenAddress) {
+      setLocalError("The payment token hasn't been set yet. Check back soon.");
+      return;
+    }
+    if (needsToken && tokenBalance !== undefined && tokenBalance < total) {
+      setLocalError(`You need ${formatAmount(total, dec)} ${sym} for this mint. Your wallet has ${formatAmount(tokenBalance, dec)}.`);
+      return;
+    }
+    if (phase === 1 && !proof.data?.eligible) {
+      setLocalError("This wallet isn't on the whitelist.");
       return;
     }
     try {
-      if (phase === 1) {
-        if (!proof.data?.eligible) {
-          setLocalError("This wallet isn't on the whitelist.");
-          return;
-        }
+      if (needsApproval && tokenAddress) {
+        // Step 1: let the Lunetta contract move exactly this mint's tokens to the burn address.
+        setStep("approving");
+        const approveHash = await writeContractAsync({
+          address: tokenAddress,
+          abi: erc20Abi,
+          functionName: "approve",
+          args: [lunettaContract.address, total],
+          chainId: chainConfig.chainId,
+        });
+        if (!publicClient) throw new Error("No connection to the network. Try again.");
+        const r = await publicClient.waitForTransactionReceipt({ hash: approveHash });
+        if (r.status !== "success") throw new Error("Approval failed. Try again.");
+        await tokenInfo.refetch();
+        reset();
+      }
+      setStep("minting");
+      if (phase === 1 && proof.data) {
         await writeContractAsync({
           ...lunettaContract,
           abi: lunettaAbi,
           functionName: "whitelistMint",
           args: [BigInt(quantity), proof.data.proof],
-          value: total,
         });
       } else {
         await writeContractAsync({
@@ -113,11 +170,12 @@ export function MintPanel() {
           abi: lunettaAbi,
           functionName: "publicMint",
           args: [BigInt(quantity)],
-          value: total,
         });
       }
     } catch (err) {
       setLocalError(friendlyError(err));
+    } finally {
+      setStep("idle");
     }
   }
 
@@ -170,7 +228,9 @@ export function MintPanel() {
                 ? `You've reached the ${PHASES[phase].toLowerCase()} limit for this wallet.`
                 : null;
 
-  const busy = confirmingInWallet || receipt.isLoading;
+  const busy = confirmingInWallet || receipt.isLoading || step !== "idle";
+  const priceNow = phase === 1 ? s.whitelistPrice : s.publicPrice;
+  const tokenMissing = priceNow > 0n && !tokenAddress;
 
   return (
     <Panel>
@@ -203,9 +263,18 @@ export function MintPanel() {
 
       {/* pricing */}
       <dl className="mt-6 grid grid-cols-2 gap-3">
-        <PriceTile label="Price" value={`${formatEth(phase === 1 ? s.whitelistPrice : s.publicPrice)} ETH`} active={phase !== 0} />
+        <PriceTile label="Price" value={priceNow === 0n ? "Free" : `${formatAmount(priceNow, dec)} ${sym}`} active={phase !== 0} />
         <PriceTile label="Per wallet" value={`${(phase === 1 ? s.whitelistLimit : s.publicLimit).toString()} max`} active={phase !== 0} />
       </dl>
+      <p className="mt-3 rounded-2xl border-2 border-ink bg-ember/15 p-3 text-sm">
+        <span className="font-semibold">Every mint burns its payment.</span> Tokens go straight to the burn address
+        (0x…dEaD) in the same transaction. Nobody keeps them.
+        {s.totalBurned > 0n && (
+          <span className="mt-1 block font-semibold">
+            Burned so far: {formatAmount(s.totalBurned, dec)} {sym} 🔥
+          </span>
+        )}
+      </p>
 
       <div className="mt-7 border-t-2 border-dashed border-ink/25 pt-6">
         {derived.soldOut ? (
@@ -249,9 +318,15 @@ export function MintPanel() {
 
             {phase !== 0 && (
               <div className="mt-5 flex items-baseline justify-between">
-                <span className="font-semibold">Total</span>
-                <span className="font-display text-2xl font-bold">{formatEth(total)} ETH</span>
+                <span className="font-semibold">Total (burned)</span>
+                <span className="font-display text-2xl font-bold">{total === 0n ? "Free" : `${formatAmount(total, dec)} ${sym}`}</span>
               </div>
+            )}
+
+            {phase !== 0 && tokenMissing && (
+              <p className="mt-4 rounded-2xl border-2 border-ink bg-lantern/40 p-3 text-sm font-semibold">
+                The payment token isn&apos;t connected yet. Minting opens as soon as it is.
+              </p>
             )}
 
             {rootMismatch && (
@@ -265,11 +340,26 @@ export function MintPanel() {
             <button
               className="btn-lantern mt-5 w-full"
               onClick={mint}
-              disabled={Boolean(disabledReason) || busy || derived.maxQty < 1}
+              disabled={Boolean(disabledReason) || busy || derived.maxQty < 1 || tokenMissing}
             >
-              {confirmingInWallet ? "Confirm in your wallet…" : receipt.isLoading ? "Minting…" : `Mint ${quantity}`}
+              {step === "approving"
+                ? confirmingInWallet
+                  ? "Step 1/2: approve in your wallet…"
+                  : "Step 1/2: approving…"
+                : confirmingInWallet
+                  ? needsApproval || step === "minting"
+                    ? "Step 2/2: confirm mint in your wallet…"
+                    : "Confirm in your wallet…"
+                  : receipt.isLoading
+                    ? "Minting…"
+                    : needsApproval
+                      ? `Approve & mint ${quantity}`
+                      : `Mint ${quantity}`}
             </button>
-            <p className="mt-2 text-center text-xs text-ink/60">Plus network gas. Balance: {balance.data ? `${formatEth(balance.data.value)} ETH` : "…"}</p>
+            <p className="mt-2 text-center text-xs text-ink/60">
+              {tokenAddress && tokenBalance !== undefined ? `Your ${sym}: ${formatAmount(tokenBalance, dec)} · ` : ""}
+              Gas is paid in ETH ({gasBalance.data ? Number(formatUnits(gasBalance.data.value, 18)).toLocaleString(undefined, { maximumFractionDigits: 5 }) : "…"} ETH)
+            </p>
           </>
         )}
       </div>

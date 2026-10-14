@@ -8,13 +8,20 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 /// @title  Lunetta — moon-cat guardians of the floating isles
 /// @notice ERC-721A collection with a Merkle whitelist phase, a public phase,
 ///         per-wallet limits, delayed reveal and ERC-2981 royalties.
+///         Mints are paid in an ERC-20 token (not ETH). Every payment is sent
+///         straight from the buyer to the burn address in the same transaction,
+///         so the contract and the owner never hold mint proceeds.
 /// @dev    Whitelist leaves follow the OpenZeppelin StandardMerkleTree format:
 ///         leaf = keccak256(bytes.concat(keccak256(abi.encode(address)))).
 contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
     // ---------------------------------------------------------------------
     // Types
     // ---------------------------------------------------------------------
@@ -37,6 +44,8 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
         uint256 whitelistMintedBy;
         uint256 publicMintedBy;
         bool revealed;
+        address paymentToken;
+        uint256 totalBurned;
     }
 
     // ---------------------------------------------------------------------
@@ -47,13 +56,14 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
     error InvalidQuantity();
     error ExceedsMaxSupply();
     error ExceedsWalletLimit();
-    error IncorrectPayment();
     error InvalidProof();
     error MetadataIsFrozen();
     error ZeroAddress();
     error WithdrawFailed();
     error NothingToWithdraw();
     error NotRevealed();
+    error PaymentTokenNotSet();
+    error PaymentTokenIsLocked();
 
     // ---------------------------------------------------------------------
     // Events
@@ -68,12 +78,26 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
     event UnrevealedURIUpdated(string unrevealedURI);
     event MetadataFrozen();
     event Withdrawn(address indexed to, uint256 amount);
+    event PaymentTokenUpdated(address indexed token);
+    event PaymentTokenLocked(address indexed token);
+    event TokensBurned(address indexed minter, uint256 quantity, uint256 amount);
+    event TokensRescued(address indexed token, address indexed to, uint256 amount);
 
     // ---------------------------------------------------------------------
     // Storage
     // ---------------------------------------------------------------------
 
+    /// @notice Where mint payments go. Tokens sent here can never be moved again.
+    address public constant BURN_ADDRESS = 0x000000000000000000000000000000000000dEaD;
+
     uint256 public immutable maxSupply;
+
+    /// @notice ERC-20 used to pay for mints. Prices are in this token's smallest unit.
+    IERC20 public paymentToken;
+    /// @notice Once true, the payment token can never be changed again.
+    bool public paymentTokenLocked;
+    /// @notice Total payment tokens burned through minting.
+    uint256 public totalBurned;
 
     Phase public phase;
     uint256 public whitelistPrice;
@@ -126,25 +150,27 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
     /// @notice Mint during the whitelist phase.
     /// @param quantity Number of tokens to mint.
     /// @param proof    Merkle proof for msg.sender.
-    function whitelistMint(uint256 quantity, bytes32[] calldata proof) external payable nonReentrant {
+    /// @dev    The buyer must first approve this contract for `whitelistPrice * quantity` payment tokens.
+    function whitelistMint(uint256 quantity, bytes32[] calldata proof) external nonReentrant {
         if (phase != Phase.Whitelist) revert PhaseNotActive();
         if (!isWhitelisted(msg.sender, proof)) revert InvalidProof();
         _checkQuantity(quantity);
         if (whitelistMinted[msg.sender] + quantity > whitelistLimit) revert ExceedsWalletLimit();
-        if (msg.value != whitelistPrice * quantity) revert IncorrectPayment();
 
         whitelistMinted[msg.sender] += quantity;
+        _burnPayment(whitelistPrice * quantity, quantity);
         _mint(msg.sender, quantity);
     }
 
     /// @notice Mint during the public phase.
-    function publicMint(uint256 quantity) external payable nonReentrant {
+    /// @dev    The buyer must first approve this contract for `publicPrice * quantity` payment tokens.
+    function publicMint(uint256 quantity) external nonReentrant {
         if (phase != Phase.Public) revert PhaseNotActive();
         _checkQuantity(quantity);
         if (publicMinted[msg.sender] + quantity > publicLimit) revert ExceedsWalletLimit();
-        if (msg.value != publicPrice * quantity) revert IncorrectPayment();
 
         publicMinted[msg.sender] += quantity;
+        _burnPayment(publicPrice * quantity, quantity);
         _mint(msg.sender, quantity);
     }
 
@@ -154,6 +180,16 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
         if (to == address(0)) revert ZeroAddress();
         _checkQuantity(quantity);
         _mint(to, quantity);
+    }
+
+    /// @dev Moves `amount` payment tokens from the buyer directly to the burn address.
+    function _burnPayment(uint256 amount, uint256 quantity) private {
+        if (amount == 0) return;
+        IERC20 token = paymentToken;
+        if (address(token) == address(0)) revert PaymentTokenNotSet();
+        token.safeTransferFrom(msg.sender, BURN_ADDRESS, amount);
+        totalBurned += amount;
+        emit TokensBurned(msg.sender, quantity, amount);
     }
 
     function _checkQuantity(uint256 quantity) private view {
@@ -185,6 +221,8 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
         s.whitelistMintedBy = whitelistMinted[account];
         s.publicMintedBy = publicMinted[account];
         s.revealed = revealed;
+        s.paymentToken = address(paymentToken);
+        s.totalBurned = totalBurned;
     }
 
     function tokenURI(uint256 tokenId) public view override(ERC721A, IERC721A) returns (string memory) {
@@ -215,6 +253,22 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
         emit PhaseChanged(newPhase);
     }
 
+    /// @notice Set the ERC-20 used for mint payments (e.g. once the token launches).
+    function setPaymentToken(address token) external onlyOwner {
+        if (paymentTokenLocked) revert PaymentTokenIsLocked();
+        if (token == address(0)) revert ZeroAddress();
+        paymentToken = IERC20(token);
+        emit PaymentTokenUpdated(token);
+    }
+
+    /// @notice Permanently fix the payment token so it can never be swapped. Irreversible.
+    function lockPaymentToken() external onlyOwner {
+        if (address(paymentToken) == address(0)) revert PaymentTokenNotSet();
+        paymentTokenLocked = true;
+        emit PaymentTokenLocked(address(paymentToken));
+    }
+
+    /// @notice Prices are in the payment token's smallest unit (e.g. 1_000_000e18 for 1,000,000 tokens).
     function setPrices(uint256 newWhitelistPrice, uint256 newPublicPrice) external onlyOwner {
         whitelistPrice = newWhitelistPrice;
         publicPrice = newPublicPrice;
@@ -264,6 +318,15 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
         _setDefaultRoyalty(receiver, feeBps);
     }
 
+    /// @notice Recover ERC-20 tokens sent to this contract by mistake. Mint payments never land
+    ///         here (they go straight to the burn address), so this cannot touch burned tokens.
+    function rescueERC20(address token, address to, uint256 amount) external onlyOwner nonReentrant {
+        if (to == address(0)) revert ZeroAddress();
+        IERC20(token).safeTransfer(to, amount);
+        emit TokensRescued(token, to, amount);
+    }
+
+    /// @notice Recover ETH force-sent to this contract (minting does not accept ETH).
     function withdraw(address payable to) external onlyOwner nonReentrant {
         if (to == address(0)) revert ZeroAddress();
         uint256 amount = address(this).balance;

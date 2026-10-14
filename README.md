@@ -25,7 +25,8 @@ Default target chain is **Robinhood Chain mainnet** (chain ID 4663; testnet 4663
 
 - **ERC-721A** + `ERC721AQueryable` (cheap batch mints, `tokensOfOwner` for the gallery). Token IDs start at 1.
 - **Phases:** `Closed → Whitelist → Public`, set by the owner.
-- **Per-phase pricing** (`whitelistPrice`, `publicPrice`) and **per-wallet limits** tracked separately per phase.
+- **Paid in the project ERC-20, burned on mint**: `paymentToken` (set/lockable by the owner) is pulled from the buyer straight to `0x…dEaD` in the mint transaction via `SafeERC20`; `totalBurned` tracks the running total. No ETH is accepted for mints.
+- **Per-phase pricing** (`whitelistPrice`, `publicPrice`, in token units) and **per-wallet limits** tracked separately per phase.
 - **Merkle whitelist** in OpenZeppelin `StandardMerkleTree` format (double-hashed leaves; second-preimage safe).
 - **Max supply** fixed at deploy (`immutable`), enforced on every mint path including `ownerMint`.
 - **Delayed reveal:** every token returns `UNREVEALED_URI` until `reveal("ipfs://CID/")`; then `baseURI + id + ".json"`. `freezeMetadata()` locks it permanently.

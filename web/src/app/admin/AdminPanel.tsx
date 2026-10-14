@@ -3,11 +3,13 @@
 import { useEffect, useState, type ReactNode } from "react";
 import {
   encodeAbiParameters,
+  erc20Abi,
   formatEther,
+  formatUnits,
   getAddress,
   isAddress,
   isHex,
-  parseEther,
+  parseUnits,
   zeroAddress,
   type Address,
   type Hash,
@@ -30,6 +32,20 @@ import { lunettaBytecode } from "@/lib/lunetta-bytecode";
 
 const STORAGE_KEY = `lunetta:admin:contract:${chainConfig.chainId}`;
 const PHASES = ["Tutup", "Whitelist", "Publik"] as const;
+const BURN_ADDRESS = "0x000000000000000000000000000000000000dEaD";
+
+/** Accepts "1000000", "1.000.000" or "1,000,000" (thousand separators) and "0.5" / "0,5" (decimals). */
+function parseTokenAmount(input: string, decimals: number) {
+  let v = input.replace(/\s/g, "");
+  if (/^\d{1,3}([.,]\d{3})+$/.test(v)) v = v.replace(/[.,]/g, "");
+  else v = v.replace(",", ".");
+  if (!/^\d+(\.\d+)?$/.test(v)) throw new Error(`Jumlah token tidak valid: ${input}`);
+  return parseUnits(v, decimals);
+}
+
+function fmtTokens(units: bigint, decimals: number) {
+  return Number(formatUnits(units, decimals)).toLocaleString("id-ID", { maximumFractionDigits: 4 });
+}
 
 function loadSaved(): Address | null {
   try {
@@ -128,8 +144,8 @@ export function AdminPanel() {
 // ---------------------------------------------------------------- deploy
 
 function DeployCard({ owner, onDeployed }: { owner: Address; onDeployed: (a: Address) => void }) {
-  const [wlPrice, setWlPrice] = useState("0.002");
-  const [pubPrice, setPubPrice] = useState("0.004");
+  const [wlPrice, setWlPrice] = useState("1000000");
+  const [pubPrice, setPubPrice] = useState("1000000");
   const [wlLimit, setWlLimit] = useState("2");
   const [pubLimit, setPubLimit] = useState("5");
   const [royaltyPct, setRoyaltyPct] = useState("5");
@@ -152,8 +168,9 @@ function DeployCard({ owner, onDeployed }: { owner: Address; onDeployed: (a: Add
       "Lunetta",
       "LUNA",
       BigInt(COLLECTION_SIZE),
-      parseEther(wlPrice),
-      parseEther(pubPrice),
+      // Token belum launch, jadi diasumsikan 18 desimal (standar ERC-20). Bisa diubah setelah token dipasang.
+      parseTokenAmount(wlPrice, 18),
+      parseTokenAmount(pubPrice, 18),
       wl,
       pub,
       `${window.location.origin}/api/metadata/hidden.json`,
@@ -204,15 +221,20 @@ function DeployCard({ owner, onDeployed }: { owner: Address; onDeployed: (a: Add
         Pemilik: <span className="font-mono">{owner}</span>. Supply dikunci {COLLECTION_SIZE} agar cocok dengan koleksi.
       </p>
       <div className="mt-5 grid gap-4 sm:grid-cols-2">
-        <Field label="Harga whitelist (ETH)" value={wlPrice} onChange={setWlPrice} />
-        <Field label="Harga publik (ETH)" value={pubPrice} onChange={setPubPrice} />
+        <Field label="Harga whitelist (jumlah token)" value={wlPrice} onChange={setWlPrice} />
+        <Field label="Harga publik (jumlah token)" value={pubPrice} onChange={setPubPrice} />
         <Field label="Batas whitelist / wallet" value={wlLimit} onChange={setWlLimit} />
         <Field label="Batas publik / wallet" value={pubLimit} onChange={setPubLimit} />
         <Field label="Royalti (%)" value={royaltyPct} onChange={setRoyaltyPct} />
         <Field label="Penerima royalti" value={royaltyTo} onChange={setRoyaltyTo} mono />
       </div>
-      <p className="mt-4 rounded-2xl border-2 border-ink bg-lantern/30 p-3 text-sm">
-        Ini mainnet: biaya gas dibayar dengan ETH sungguhan dan kontrak tidak bisa diubah setelah di-deploy. Cek ulang harga dan batas.
+      <p className="mt-4 rounded-2xl border-2 border-ember bg-ember/15 p-3 text-sm">
+        Mint dibayar dengan <b>token proyek</b>, bukan ETH. Setiap token pembayaran langsung dikirim ke alamat burn{" "}
+        <span className="font-mono">0x…dEaD</span> di transaksi yang sama, jadi tidak masuk ke kontrak atau ke wallet-mu. Alamat token
+        dipasang setelah deploy (langkah 2), misalnya setelah token-mu launch.
+      </p>
+      <p className="mt-3 rounded-2xl border-2 border-ink bg-lantern/30 p-3 text-sm">
+        Ini mainnet: gas deploy dibayar dengan ETH sungguhan. Harga dan batas masih bisa diubah nanti.
       </p>
       <button className="btn-lantern mt-5 w-full" onClick={deploy} disabled={isPending || receipt.isLoading}>
         {isPending ? "Konfirmasi di wallet…" : receipt.isLoading ? "Menunggu blok…" : "Deploy Lunetta"}
@@ -255,13 +277,36 @@ function ManageCard({ contract, me }: { contract: Address; me: Address }) {
       { ...c, functionName: "publicPrice" },
       { ...c, functionName: "merkleRoot" },
       { ...c, functionName: "pendingOwner" },
+      { ...c, functionName: "paymentToken" },
+      { ...c, functionName: "paymentTokenLocked" },
+      { ...c, functionName: "totalBurned" },
     ],
     query: { refetchInterval: 8_000 },
   });
   const balance = useBalance({ address: contract, chainId: chainConfig.chainId, query: { refetchInterval: 8_000 } });
 
-  const [owner, phase, minted, max, revealed, wlPrice, pubPrice, root] = (reads.data ?? []).map((r) => r.result);
+  const [owner, phase, minted, max, revealed, wlPrice, pubPrice, root, , payToken, payLocked, burned] = (reads.data ?? []).map(
+    (r) => r.result,
+  );
   const isOwner = typeof owner === "string" && owner.toLowerCase() === me.toLowerCase();
+  const tokenSet = typeof payToken === "string" && payToken !== zeroAddress;
+  const tokenReads = useReadContracts({
+    contracts: [
+      { address: tokenSet ? (payToken as Address) : zeroAddress, abi: erc20Abi, functionName: "symbol", chainId: chainConfig.chainId },
+      { address: tokenSet ? (payToken as Address) : zeroAddress, abi: erc20Abi, functionName: "decimals", chainId: chainConfig.chainId },
+      {
+        address: tokenSet ? (payToken as Address) : zeroAddress,
+        abi: erc20Abi,
+        functionName: "balanceOf",
+        args: [BURN_ADDRESS],
+        chainId: chainConfig.chainId,
+      },
+    ],
+    query: { enabled: tokenSet, refetchInterval: 15_000 },
+  });
+  const [symR, decR, deadR] = tokenSet && tokenReads.data ? tokenReads.data.map((r) => r.result) : [];
+  const sym = typeof symR === "string" ? symR : "token";
+  const dec = typeof decR === "number" ? decR : 18;
 
   const { writeContractAsync, data: hash, isPending, error, reset } = useWriteContract();
   const receipt = useWaitForTransactionReceipt({ hash, chainId: chainConfig.chainId });
@@ -274,18 +319,22 @@ function ManageCard({ contract, me }: { contract: Address; me: Address }) {
   }, [receipt.isSuccess]);
 
   const busy = isPending || receipt.isLoading;
+  const [inputError, setInputError] = useState<string | null>(null);
   async function send(fn: () => Promise<Hash>) {
     reset();
+    setInputError(null);
     try {
       await fn();
-    } catch {
-      /* rendered from `error` */
+    } catch (e) {
+      // wallet/contract errors are rendered from `error`; input mistakes land here
+      if (e instanceof Error && e.message.startsWith("Jumlah token")) setInputError(e.message);
     }
   }
 
   const [newWl, setNewWl] = useState("");
   const [newPub, setNewPub] = useState("");
   const [rootInput, setRootInput] = useState("");
+  const [tokenInput, setTokenInput] = useState("");
   const [mintTo, setMintTo] = useState<string>(me);
   const [mintQty, setMintQty] = useState("1");
 
@@ -309,8 +358,13 @@ function ManageCard({ contract, me }: { contract: Address; me: Address }) {
         <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
           <Stat label="Fase" value={typeof phase === "number" ? PHASES[phase] : "…"} />
           <Stat label="Terjual" value={minted !== undefined && max !== undefined ? `${String(minted)} / ${String(max)}` : "…"} />
-          <Stat label="Harga WL / publik" value={typeof wlPrice === "bigint" && typeof pubPrice === "bigint" ? `${formatEther(wlPrice)} / ${formatEther(pubPrice)} ETH` : "…"} />
-          <Stat label="Saldo kontrak" value={balance.data ? `${formatEther(balance.data.value)} ETH` : "…"} />
+          <Stat
+            label="Harga WL / publik"
+            value={typeof wlPrice === "bigint" && typeof pubPrice === "bigint" ? `${fmtTokens(wlPrice, dec)} / ${fmtTokens(pubPrice, dec)} ${sym}` : "…"}
+          />
+          <Stat label="Token pembayaran" value={payToken === undefined ? "…" : tokenSet ? `${sym}${payLocked ? " (terkunci)" : ""}` : "Belum dipasang"} />
+          <Stat label="Terbakar lewat mint" value={typeof burned === "bigint" ? `${fmtTokens(burned, dec)} ${sym}` : "…"} />
+          <Stat label="Total di 0x…dEaD" value={typeof deadR === "bigint" ? `${fmtTokens(deadR, dec)} ${sym}` : tokenSet ? "…" : "-"} />
           <Stat label="Metadata" value={revealed === undefined ? "…" : revealed ? "Tersambung" : "Belum disambung"} />
           <Stat label="Kamu pemilik?" value={owner === undefined ? "…" : isOwner ? "Ya" : "Bukan"} />
         </dl>
@@ -328,8 +382,24 @@ function ManageCard({ contract, me }: { contract: Address; me: Address }) {
         </Card>
       ) : (
         <>
+          {!tokenSet && (
+            <Action
+              title="2. Pasang token pembayaran"
+              desc="Isi alamat kontrak token-mu (ERC-20 di Robinhood Chain). Pembeli membayar mint dengan token ini dan semuanya langsung di-burn."
+            >
+              <TokenInput value={tokenInput} onChange={setTokenInput} />
+              <button
+                className="btn-lantern mt-3 w-full"
+                disabled={busy || !isAddress(tokenInput)}
+                onClick={() => send(() => writeContractAsync({ ...c, functionName: "setPaymentToken", args: [getAddress(tokenInput)] }))}
+              >
+                Pasang token
+              </button>
+            </Action>
+          )}
+
           {revealed === false && (
-            <Action title="2. Sambungkan metadata" desc="Arahkan tokenURI ke website ini. Gambar tiap token tetap tersembunyi sampai token itu di-mint.">
+            <Action title="3. Sambungkan metadata" desc="Arahkan tokenURI ke website ini. Gambar tiap token tetap tersembunyi sampai token itu di-mint.">
               <button
                 className="btn-lantern w-full"
                 disabled={busy}
@@ -340,8 +410,8 @@ function ManageCard({ contract, me }: { contract: Address; me: Address }) {
             </Action>
           )}
 
-          {revealed === true && phase !== 2 && (
-            <Action title="3. Buka mint publik" desc="Setelah ini tombol Mint di website langsung berfungsi untuk semua orang.">
+          {revealed === true && phase !== 2 && tokenSet && (
+            <Action title="4. Buka mint publik" desc="Setelah ini tombol Mint di website langsung berfungsi untuk semua orang.">
               <button
                 className="btn-lantern w-full"
                 disabled={busy}
@@ -379,16 +449,52 @@ function ManageCard({ contract, me }: { contract: Address; me: Address }) {
             </button>
           </Action>
 
-          <Action title="Ubah harga" desc="Dalam ETH. Berlaku untuk mint berikutnya.">
+          {tokenSet && !payLocked && (
+            <Action
+              title="Token pembayaran"
+              desc="Ganti token kalau salah pasang. Setelah yakin, kunci supaya pembeli tahu token tidak bisa diganti lagi (permanen)."
+            >
+              <p className="break-all font-mono text-xs">{String(payToken)}</p>
+              <TokenInput value={tokenInput} onChange={setTokenInput} />
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button
+                  className="btn-paper !px-3"
+                  disabled={busy || !isAddress(tokenInput)}
+                  onClick={() => send(() => writeContractAsync({ ...c, functionName: "setPaymentToken", args: [getAddress(tokenInput)] }))}
+                >
+                  Ganti token
+                </button>
+                <button
+                  className="btn-paper !px-3"
+                  disabled={busy}
+                  onClick={() => {
+                    if (window.confirm(`Kunci ${sym} sebagai token pembayaran selamanya? Ini tidak bisa dibatalkan.`)) {
+                      send(() => writeContractAsync({ ...c, functionName: "lockPaymentToken" }));
+                    }
+                  }}
+                >
+                  Kunci token
+                </button>
+              </div>
+            </Action>
+          )}
+
+          <Action title="Ubah harga" desc={`Dalam jumlah ${sym} per NFT (bukan ETH). Semua pembayaran di-burn. Berlaku untuk mint berikutnya.`}>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Whitelist" value={newWl} onChange={setNewWl} placeholder={typeof wlPrice === "bigint" ? formatEther(wlPrice) : ""} />
-              <Field label="Publik" value={newPub} onChange={setNewPub} placeholder={typeof pubPrice === "bigint" ? formatEther(pubPrice) : ""} />
+              <Field label="Whitelist" value={newWl} onChange={setNewWl} placeholder={typeof wlPrice === "bigint" ? formatUnits(wlPrice, dec) : ""} />
+              <Field label="Publik" value={newPub} onChange={setNewPub} placeholder={typeof pubPrice === "bigint" ? formatUnits(pubPrice, dec) : ""} />
             </div>
             <button
               className="btn-paper mt-3 w-full"
               disabled={busy || !newWl || !newPub}
               onClick={() =>
-                send(() => writeContractAsync({ ...c, functionName: "setPrices", args: [parseEther(newWl), parseEther(newPub)] }))
+                send(() =>
+                  writeContractAsync({
+                    ...c,
+                    functionName: "setPrices",
+                    args: [parseTokenAmount(newWl, dec), parseTokenAmount(newPub, dec)],
+                  }),
+                )
               }
             >
               Simpan harga
@@ -411,19 +517,22 @@ function ManageCard({ contract, me }: { contract: Address; me: Address }) {
             </button>
           </Action>
 
-          <Action title="Tarik dana" desc="Kirim seluruh saldo kontrak ke wallet yang sedang terhubung.">
-            <button
-              className="btn-paper w-full"
-              disabled={busy || !balance.data || balance.data.value === 0n}
-              onClick={() => send(() => writeContractAsync({ ...c, functionName: "withdraw", args: [me] }))}
-            >
-              Tarik {balance.data ? formatEther(balance.data.value) : "0"} ETH
-            </button>
-          </Action>
+          {balance.data && balance.data.value > 0n && (
+            <Action title="ETH nyasar" desc="Mint tidak menerima ETH, tapi kalau ada ETH yang terkirim ke kontrak, bisa ditarik di sini.">
+              <button
+                className="btn-paper w-full"
+                disabled={busy}
+                onClick={() => send(() => writeContractAsync({ ...c, functionName: "withdraw", args: [me] }))}
+              >
+                Tarik {formatEther(balance.data.value)} ETH
+              </button>
+            </Action>
+          )}
         </>
       )}
 
       <div aria-live="polite">
+        {inputError && <Status tone="error">{inputError}</Status>}
         {error && <Status tone="error">{friendlyError(error)}</Status>}
         {hash && receipt.isLoading && (
           <Status tone="info">
@@ -476,6 +585,16 @@ function Field({
         onChange={(e) => onChange(e.target.value.trim())}
         inputMode={mono ? "text" : "decimal"}
       />
+    </label>
+  );
+}
+
+function TokenInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <label className="mt-3 block text-sm font-semibold">
+      Alamat token
+      <input className="field mt-1 font-mono text-xs" placeholder="0x… kontrak token" value={value} onChange={(e) => onChange(e.target.value.trim())} />
+      {value && !isAddress(value) && <span className="mt-1 block text-xs text-ember">Alamat tidak valid.</span>}
     </label>
   );
 }
