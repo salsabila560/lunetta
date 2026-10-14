@@ -19,7 +19,7 @@ export const metadata: Metadata = {
     title: `${siteConfig.name} — ${siteConfig.tagline}`,
     description: siteConfig.description,
   },
-  twitter: { card: "summary_large_image", title: siteConfig.name, description: siteConfig.description },
+  twitter: { card: "summary_large_image", site: "@lunettacats", creator: "@lunettacats", title: siteConfig.name, description: siteConfig.description },
   robots: { index: true, follow: true },
   icons: { icon: "/icon.svg" },
 };

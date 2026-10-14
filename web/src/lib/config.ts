@@ -48,9 +48,9 @@ export const siteConfig = {
   tagline: "Keep watch over the drifting isles.",
   description:
     "Lunetta is a hand-drawn fantasy game of moon-cat guardians who keep the floating isles of Halcyra aloft. Mint a Lunetta, and it walks into the game as your character.",
-  url: (process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000").replace(/\/$/, ""),
-  xUrl: process.env.NEXT_PUBLIC_X_URL ?? "",
-  discordUrl: process.env.NEXT_PUBLIC_DISCORD_URL ?? "",
+  url: (process.env.NEXT_PUBLIC_SITE_URL || "https://lunetta.fun").replace(/\/$/, ""),
+  xUrl: process.env.NEXT_PUBLIC_X_URL || "https://x.com/lunettacats",
+  discordUrl: process.env.NEXT_PUBLIC_DISCORD_URL || "",
   playUrl: process.env.NEXT_PUBLIC_PLAY_URL ?? "",
   ipfsGateway: (process.env.NEXT_PUBLIC_IPFS_GATEWAY ?? "https://ipfs.io/ipfs/").replace(/\/?$/, "/"),
 } as const;

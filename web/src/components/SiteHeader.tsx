@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
+import { siteConfig } from "@/lib/config";
 import { WalletButton } from "./WalletButton";
 
 const NAV = [
@@ -11,6 +12,14 @@ const NAV = [
   { href: "/mint", label: "Mint" },
   { href: "/gallery", label: "Gallery" },
 ];
+
+function XIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="currentColor" aria-hidden="true">
+      <path d="M17.75 3h3.07l-6.7 7.66L22 21h-6.17l-4.83-6.32L5.47 21H2.4l7.17-8.2L2 3h6.33l4.37 5.77L17.75 3Zm-1.08 16.2h1.7L7.4 4.72H5.58L16.67 19.2Z" />
+    </svg>
+  );
+}
 
 export function SiteHeader() {
   const pathname = usePathname();
@@ -34,6 +43,17 @@ export function SiteHeader() {
               {item.label}
             </Link>
           ))}
+          {siteConfig.xUrl && (
+            <a
+              href={siteConfig.xUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Lunetta on X"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-full border-2 border-paper/50 text-paper/85 hover:border-lantern hover:text-lantern"
+            >
+              <XIcon />
+            </a>
+          )}
         </nav>
 
         <div className="flex items-center gap-3">
@@ -66,6 +86,16 @@ export function SiteHeader() {
               </li>
             ))}
           </ul>
+          {siteConfig.xUrl && (
+            <a
+              href={siteConfig.xUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-2 flex items-center gap-2 rounded-xl px-3 py-3 font-display text-xl font-semibold hover:bg-parchment"
+            >
+              <XIcon className="h-5 w-5" /> @lunettacats
+            </a>
+          )}
           <div className="mt-4 sm:hidden">
             <WalletButton size="lg" />
           </div>
