@@ -43,6 +43,11 @@ const rawAddress =
   (deployment.chainId === chainId ? deployment.address : "");
 const contractAddress: Address = isAddress(rawAddress) ? getAddress(rawAddress) : zeroAddress;
 
+// Project ERC-20 used to pay for (and burned by) mints. Shown on the site; the contract's own
+// paymentToken() is what minting actually uses.
+const dep = deployment as { chainId: number; token?: string; tokenSymbol?: string };
+const rawToken = dep.chainId === chainId && dep.token && isAddress(dep.token) ? getAddress(dep.token) : null;
+
 export const siteConfig = {
   name: "Lunetta",
   tagline: "Keep watch over the drifting isles.",
@@ -61,6 +66,8 @@ export const chainConfig = {
   rpcUrl: process.env.NEXT_PUBLIC_RPC_URL || chain.rpcUrls.default.http[0],
   contractAddress,
   isContractConfigured: contractAddress !== zeroAddress,
+  tokenAddress: rawToken,
+  tokenSymbol: dep.tokenSymbol || "LUNE",
   explorerUrl: chain.blockExplorers?.default.url ?? "",
   walletConnectProjectId: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID ?? "",
 } as const;

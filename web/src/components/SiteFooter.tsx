@@ -60,7 +60,7 @@ export function SiteFooter() {
             </ul>
           </nav>
           <div>
-            <p className="font-display text-lg font-semibold">Contract</p>
+            <p className="font-display text-lg font-semibold">NFT contract</p>
             {chainConfig.isContractConfigured ? (
               <a
                 href={explorerAddress(chainConfig.contractAddress)}
@@ -72,6 +72,19 @@ export function SiteFooter() {
               </a>
             ) : (
               <p className="mt-3 text-sm text-ink/70">Announced at launch. Only trust the address shown on this site.</p>
+            )}
+            {chainConfig.tokenAddress && (
+              <>
+                <p className="mt-5 font-display text-lg font-semibold">${chainConfig.tokenSymbol} token</p>
+                <a
+                  href={explorerAddress(chainConfig.tokenAddress)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-3 block break-all font-mono text-sm text-ink/80 hover:underline"
+                >
+                  {chainConfig.tokenAddress}
+                </a>
+              </>
             )}
           </div>
         </div>

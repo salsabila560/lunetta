@@ -15,7 +15,7 @@ import {
 } from "wagmi";
 import { WalletButton } from "@/components/WalletButton";
 import { lunettaAbi } from "@/lib/abi";
-import { chainConfig, explorerTx } from "@/lib/config";
+import { chainConfig, explorerAddress, explorerTx } from "@/lib/config";
 import { friendlyError } from "@/lib/errors";
 import { lunettaContract } from "@/lib/wagmi";
 
@@ -63,7 +63,8 @@ export function MintPanel() {
   });
   const [symbol, decimals, tokenBalance, allowance] = tokenAddress && tokenInfo.data ? tokenInfo.data : [undefined, undefined, undefined, undefined];
   const dec = decimals ?? 18;
-  const sym = symbol ?? "tokens";
+  const sym = symbol ?? chainConfig.tokenSymbol;
+  const shownToken = tokenAddress ?? chainConfig.tokenAddress;
 
   const publicClient = usePublicClient({ chainId: chainConfig.chainId });
   const [step, setStep] = useState<"idle" | "approving" | "minting">("idle");
@@ -245,6 +246,14 @@ export function MintPanel() {
       <p className="mt-3 rounded-2xl border-2 border-ink bg-ember/15 p-3 text-sm">
         <span className="font-semibold">Every mint burns its payment.</span> Tokens go straight to the burn address
         (0x…dEaD) in the same transaction. Nobody keeps them.
+        {shownToken && (
+          <span className="mt-1 block">
+            Paid in <span className="font-semibold">${sym}</span>:{" "}
+            <a className="break-all font-mono text-xs underline" href={explorerAddress(shownToken)} target="_blank" rel="noopener noreferrer">
+              {shownToken}
+            </a>
+          </span>
+        )}
         {s.totalBurned > 0n && (
           <span className="mt-1 block font-semibold">
             Burned so far: {formatAmount(s.totalBurned, dec)} {sym} 🔥

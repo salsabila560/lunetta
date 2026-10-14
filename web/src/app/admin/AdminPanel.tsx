@@ -433,7 +433,7 @@ function ManageCard({ contract, me }: { contract: Address; me: Address }) {
   const onchainTiers = tiersRead.data?.[0]?.result as readonly [readonly bigint[], readonly bigint[]] | undefined;
   const [tierRows, setTierRows] = useState<TierRow[] | null>(null);
   const [newLimit, setNewLimit] = useState("");
-  const [tokenInput, setTokenInput] = useState("");
+  const [tokenInput, setTokenInput] = useState<string>(chainConfig.tokenAddress ?? "");
   const [mintTo, setMintTo] = useState<string>(me);
   const [mintQty, setMintQty] = useState("1");
 
