@@ -41,6 +41,65 @@ function parseTokenAmount(input: string, decimals: number) {
   return parseUnits(v, decimals);
 }
 
+type TierRow = { end: string; price: string };
+
+const DEFAULT_TIERS: TierRow[] = [
+  { end: "100", price: "1000000" },
+  { end: "200", price: "2000000" },
+  { end: "300", price: "5000000" },
+  { end: String(COLLECTION_SIZE), price: "10000000" },
+];
+
+/** Validates the tier rows and converts them to contract arguments. */
+function buildTiers(rows: TierRow[], decimals: number) {
+  const ends: bigint[] = [];
+  const prices: bigint[] = [];
+  rows.forEach((r, i) => {
+    if (!/^\d+$/.test(r.end)) throw new Error(`Tingkat ${i + 1}: "sampai NFT #" harus angka.`);
+    const end = BigInt(r.end);
+    if (i > 0 && end <= ends[i - 1]!) throw new Error(`Tingkat ${i + 1}: nomor akhir harus lebih besar dari tingkat sebelumnya.`);
+    ends.push(end);
+    prices.push(parseTokenAmount(r.price, decimals));
+  });
+  if (ends.length === 0) throw new Error("Minimal satu tingkat harga.");
+  if (ends[ends.length - 1]! < BigInt(COLLECTION_SIZE)) throw new Error(`Tingkat terakhir harus sampai #${COLLECTION_SIZE}.`);
+  return [ends, prices] as const;
+}
+
+function TierEditor({ rows, onChange, unit }: { rows: TierRow[]; onChange: (rows: TierRow[]) => void; unit: string }) {
+  const set = (i: number, key: keyof TierRow, v: string) => onChange(rows.map((r, j) => (j === i ? { ...r, [key]: v } : r)));
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-[1fr_1fr_auto] gap-2 text-xs font-semibold text-ink/60">
+        <span>Sampai NFT #</span>
+        <span>Harga per NFT ({unit})</span>
+        <span className="w-8" />
+      </div>
+      {rows.map((r, i) => (
+        <div key={i} className="grid grid-cols-[1fr_1fr_auto] items-center gap-2">
+          <input className="field" inputMode="numeric" value={r.end} onChange={(e) => set(i, "end", e.target.value.trim())} aria-label={`Tingkat ${i + 1} sampai NFT nomor`} />
+          <input className="field" inputMode="decimal" value={r.price} onChange={(e) => set(i, "price", e.target.value.trim())} aria-label={`Tingkat ${i + 1} harga`} />
+          <button
+            type="button"
+            className="h-8 w-8 rounded-full border-2 border-ink/30 text-sm font-bold disabled:opacity-30"
+            disabled={rows.length <= 1}
+            onClick={() => onChange(rows.filter((_, j) => j !== i))}
+            aria-label={`Hapus tingkat ${i + 1}`}
+          >
+            ×
+          </button>
+        </div>
+      ))}
+      <button type="button" className="text-sm font-semibold underline" onClick={() => onChange([...rows, { end: "", price: "" }])}>
+        + Tambah tingkat
+      </button>
+      <p className="text-xs text-ink/60">
+        Contoh: #1–100 = 1.000.000, #101–200 = 2.000.000. Kalau satu transaksi melewati batas tingkat, tiap NFT dihitung dengan harga tingkatnya.
+      </p>
+    </div>
+  );
+}
+
 function fmtTokens(units: bigint, decimals: number) {
   return Number(formatUnits(units, decimals)).toLocaleString("id-ID", { maximumFractionDigits: 4 });
 }
@@ -142,7 +201,7 @@ export function AdminPanel() {
 // ---------------------------------------------------------------- deploy
 
 function DeployCard({ owner, onDeployed }: { owner: Address; onDeployed: (a: Address) => void }) {
-  const [price, setPrice] = useState("1000000");
+  const [tiers, setTiers] = useState<TierRow[]>(DEFAULT_TIERS);
   const [walletLimit, setWalletLimit] = useState("5");
   const [royaltyPct, setRoyaltyPct] = useState("5");
   const [royaltyTo, setRoyaltyTo] = useState<string>(owner);
@@ -160,12 +219,14 @@ function DeployCard({ owner, onDeployed }: { owner: Address; onDeployed: (a: Add
     if (!/^\d+$/.test(walletLimit)) throw new Error("Batas per wallet harus angka.");
     const limit = BigInt(walletLimit);
     if (limit < 1n) throw new Error("Batas per wallet minimal 1.");
+    // Token belum launch, jadi diasumsikan 18 desimal (standar ERC-20). Bisa diubah setelah token dipasang.
+    const [ends, prices] = buildTiers(tiers, 18);
     return [
       "Lunetta",
       "LUNA",
       BigInt(COLLECTION_SIZE),
-      // Token belum launch, jadi diasumsikan 18 desimal (standar ERC-20). Bisa diubah setelah token dipasang.
-      parseTokenAmount(price, 18),
+      ends,
+      prices,
       limit,
       `${window.location.origin}/api/metadata/hidden.json`,
       getAddress(royaltyTo),
@@ -201,7 +262,7 @@ function DeployCard({ owner, onDeployed }: { owner: Address; onDeployed: (a: Add
     args && deployed
       ? encodeAbiParameters(
           [
-            { type: "string" }, { type: "string" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" },
+            { type: "string" }, { type: "string" }, { type: "uint256" }, { type: "uint256[]" }, { type: "uint256[]" }, { type: "uint256" },
             { type: "string" }, { type: "address" }, { type: "uint96" }, { type: "address" },
           ],
           args as never,
@@ -215,7 +276,10 @@ function DeployCard({ owner, onDeployed }: { owner: Address; onDeployed: (a: Add
         Pemilik: <span className="font-mono">{owner}</span>. Supply dikunci {COLLECTION_SIZE} agar cocok dengan koleksi.
       </p>
       <div className="mt-5 grid gap-4 sm:grid-cols-2">
-        <Field label="Harga mint per NFT (jumlah token)" value={price} onChange={setPrice} />
+        <div className="sm:col-span-2">
+          <p className="mb-2 text-sm font-semibold">Harga bertingkat (jumlah token)</p>
+          <TierEditor rows={tiers} onChange={setTiers} unit="token" />
+        </div>
         <Field label="Batas mint per wallet" value={walletLimit} onChange={setWalletLimit} />
         <Field label="Royalti (%)" value={royaltyPct} onChange={setRoyaltyPct} />
         <Field label="Penerima royalti" value={royaltyTo} onChange={setRoyaltyTo} mono />
@@ -265,7 +329,7 @@ function ManageCard({ contract, me }: { contract: Address; me: Address }) {
       { ...c, functionName: "totalMinted" },
       { ...c, functionName: "maxSupply" },
       { ...c, functionName: "revealed" },
-      { ...c, functionName: "price" },
+      { ...c, functionName: "currentPrice" },
       { ...c, functionName: "walletLimit" },
       { ...c, functionName: "pendingOwner" },
       { ...c, functionName: "paymentToken" },
@@ -318,11 +382,15 @@ function ManageCard({ contract, me }: { contract: Address; me: Address }) {
       await fn();
     } catch (e) {
       // wallet/contract errors are rendered from `error`; input mistakes land here
-      if (e instanceof Error && e.message.startsWith("Jumlah token")) setInputError(e.message);
+      if (e instanceof Error && (e.message.startsWith("Jumlah token") || e.message.startsWith("Tingkat") || e.message.startsWith("Minimal"))) {
+        setInputError(e.message);
+      }
     }
   }
 
-  const [newPrice, setNewPrice] = useState("");
+  const tiersRead = useReadContracts({ contracts: [{ ...c, functionName: "priceTiers" }], query: { refetchInterval: 30_000 } });
+  const onchainTiers = tiersRead.data?.[0]?.result as readonly [readonly bigint[], readonly bigint[]] | undefined;
+  const [tierRows, setTierRows] = useState<TierRow[] | null>(null);
   const [newLimit, setNewLimit] = useState("");
   const [tokenInput, setTokenInput] = useState("");
   const [mintTo, setMintTo] = useState<string>(me);
@@ -342,7 +410,7 @@ function ManageCard({ contract, me }: { contract: Address; me: Address }) {
           <Stat label="Mint" value={mintOpen === undefined ? "…" : mintOpen ? "Terbuka (publik)" : "Tutup"} />
           <Stat label="Terjual" value={minted !== undefined && max !== undefined ? `${String(minted)} / ${String(max)}` : "…"} />
           <Stat
-            label="Harga / batas per wallet"
+            label="Harga sekarang / batas per wallet"
             value={typeof price === "bigint" && typeof walletLimit === "bigint" ? `${fmtTokens(price, dec)} ${sym} / ${walletLimit} NFT` : "…"}
           />
           <Stat label="Token pembayaran" value={payToken === undefined ? "…" : tokenSet ? `${sym}${payLocked ? " (terkunci)" : ""}` : "Belum dipasang"} />
@@ -454,15 +522,54 @@ function ManageCard({ contract, me }: { contract: Address; me: Address }) {
             </Action>
           )}
 
-          <Action title="Ubah harga" desc={`Dalam jumlah ${sym} per NFT (bukan ETH). Semua pembayaran di-burn. Berlaku untuk mint berikutnya.`}>
-            <Field label="Harga per NFT" value={newPrice} onChange={setNewPrice} placeholder={typeof price === "bigint" ? formatUnits(price, dec) : ""} />
-            <button
-              className="btn-paper mt-3 w-full"
-              disabled={busy || !newPrice}
-              onClick={() => send(() => writeContractAsync({ ...c, functionName: "setPrice", args: [parseTokenAmount(newPrice, dec)] }))}
-            >
-              Simpan harga
-            </button>
+          <Action title="Harga bertingkat" desc={`Dalam jumlah ${sym} per NFT (bukan ETH). Harga naik sesuai nomor NFT yang di-mint. Semua pembayaran di-burn.`}>
+            {onchainTiers && (
+              <ol className="mb-4 space-y-1 text-sm">
+                {onchainTiers[0].map((end, i) => (
+                  <li key={i} className="flex justify-between rounded-xl border-2 border-ink/15 px-3 py-1.5">
+                    <span>
+                      #{i === 0 ? "1" : String(onchainTiers[0][i - 1]! + 1n)} – #{String(end)}
+                    </span>
+                    <span className="font-semibold">
+                      {fmtTokens(onchainTiers[1][i]!, dec)} {sym}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+            {tierRows ? (
+              <>
+                <TierEditor rows={tierRows} onChange={setTierRows} unit={sym} />
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <button className="btn-paper !px-3" disabled={busy} onClick={() => setTierRows(null)}>
+                    Batal
+                  </button>
+                  <button
+                    className="btn-lantern !px-3"
+                    disabled={busy}
+                    onClick={() =>
+                      send(() => {
+                        const [ends, prices] = buildTiers(tierRows, dec);
+                        return writeContractAsync({ ...c, functionName: "setPriceTiers", args: [ends, prices] });
+                      })
+                    }
+                  >
+                    Simpan harga
+                  </button>
+                </div>
+              </>
+            ) : (
+              <button
+                className="btn-paper w-full"
+                disabled={busy || !onchainTiers}
+                onClick={() =>
+                  onchainTiers &&
+                  setTierRows(onchainTiers[0].map((end, i) => ({ end: String(end), price: formatUnits(onchainTiers[1][i]!, dec) })))
+                }
+              >
+                Ubah harga
+              </button>
+            )}
           </Action>
 
           <Action title="Ubah batas per wallet" desc="Jumlah maksimal NFT yang boleh di-mint satu wallet.">

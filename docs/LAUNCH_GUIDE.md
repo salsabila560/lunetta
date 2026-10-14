@@ -4,10 +4,10 @@
 
 The site ships with an owner panel at **`/admin`** that deploys and manages the contract straight from your wallet. Default network: **Robinhood Chain mainnet** (chain ID 4663, RPC `https://rpc.mainnet.chain.robinhood.com`, explorer `https://robinhoodchain.blockscout.com`). Use chain ID 46630 (`NEXT_PUBLIC_CHAIN_ID`) to rehearse on Robinhood Chain Testnet first.
 
-**Payment model:** mints are paid in the project's ERC-20 token, not ETH (default price 1,000,000 tokens per NFT). Every payment is transferred from the buyer straight to the burn address `0x000000000000000000000000000000000000dEaD` inside the mint transaction, so the contract and the owner never hold mint proceeds. Buyers still need a little ETH for gas, and approve the token once before minting (the mint page does both steps).
+**Payment model:** mints are paid in the project's ERC-20 token, not ETH (tiered by mint number: #1–100 = 1,000,000, #101–200 = 2,000,000, #201–300 = 5,000,000, #301–1000 = 10,000,000 tokens; editable with `setPriceTiers`). Every payment is transferred from the buyer straight to the burn address `0x000000000000000000000000000000000000dEaD` inside the mint transaction, so the contract and the owner never hold mint proceeds. Buyers still need a little ETH for gas, and approve the token once before minting (the mint page does both steps).
 
 1. Open `https://<your-site>/admin` in your wallet's in-app browser (MetaMask, Rainbow, Coinbase Wallet). Have a little ETH on Robinhood Chain for gas.
-2. Connect, check prices (in tokens) and limits, tap **Deploy Lunetta**, confirm in the wallet. The panel shows the contract address and the constructor arguments. Prices assume an 18-decimal token; adjust them later from the panel if your token differs.
+2. Connect, check the price tiers (in tokens) and wallet limit, tap **Deploy Lunetta**, confirm in the wallet. The panel shows the contract address and the constructor arguments. Prices assume an 18-decimal token; adjust them later from the panel if your token differs.
 3. **Pasang token pembayaran** (`setPaymentToken`): paste the ERC-20 address once the token is live. Minting can't start before this (unless the price is 0). When you're sure it's right, tap **Kunci token** (`lockPaymentToken`) so holders know it can never be swapped.
 4. Tap **Sambungkan metadata** (reveal). This points `tokenURI` at `/api/metadata/`; each token's art stays hidden until that token is minted, so rarities can't be sniped.
 5. Make the public site use the contract: commit the address into `web/data/deployment.json` (or set `NEXT_PUBLIC_CONTRACT_ADDRESS` in Vercel) and redeploy.
@@ -59,8 +59,8 @@ forge script script/Deploy.s.sol:Deploy \
 - If verification fails, retry it on its own:
   ```bash
   forge verify-contract <ADDRESS> src/Lunetta.sol:Lunetta --chain base-sepolia --watch \
-    --constructor-args $(cast abi-encode "constructor(string,string,uint256,uint256,uint256,string,address,uint96,address)" \
-      "Lunetta" "LUNA" $MAX_SUPPLY $PRICE_UNITS $WALLET_LIMIT "$UNREVEALED_URI" $ROYALTY_RECEIVER $ROYALTY_BPS <DEPLOYER_ADDRESS>)
+    --constructor-args $(cast abi-encode "constructor(string,string,uint256,uint256[],uint256[],uint256,string,address,uint96,address)" \
+      "Lunetta" "LUNA" $MAX_SUPPLY "[$TIER_ENDS]" "[$TIER_PRICES_UNITS]" $WALLET_LIMIT "$UNREVEALED_URI" $ROYALTY_RECEIVER $ROYALTY_BPS <DEPLOYER_ADDRESS>)
   ```
 - If `INITIAL_OWNER` was a Safe, accept ownership from the Safe (Transaction Builder → `acceptOwnership()`).
 
@@ -91,7 +91,7 @@ Complete **every item** in [SECURITY_CHECKLIST.md](SECURITY_CHECKLIST.md). In pa
 
 ## 4. Mainnet (Base)
 
-1. Final parameters in `contracts/.env`: `MAX_SUPPLY`, `PRICE_UNITS` in token units (double-check with `cast to-wei 1000000`), `WALLET_LIMIT`, `PAYMENT_TOKEN`, `ROYALTY_RECEIVER` and `INITIAL_OWNER` = Safe address, `UNREVEALED_URI`.
+1. Final parameters in `contracts/.env`: `MAX_SUPPLY`, `TIER_ENDS` / `TIER_PRICES_UNITS` in token units (double-check with `cast to-wei 1000000`), `WALLET_LIMIT`, `PAYMENT_TOKEN`, `ROYALTY_RECEIVER` and `INITIAL_OWNER` = Safe address, `UNREVEALED_URI`.
 2. Dry run (no broadcast) and read the output carefully:
    ```bash
    forge script script/Deploy.s.sol:Deploy --rpc-url base --account deployer -vvvv

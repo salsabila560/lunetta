@@ -95,7 +95,22 @@ export function MintPanel() {
     if (derived && derived.maxQty > 0 && quantity > derived.maxQty) setQuantity(derived.maxQty);
   }, [derived, quantity]);
 
-  const total = derived ? derived.price * BigInt(quantity) : 0n;
+  // Prices rise in tiers as the collection mints out, so the total comes from the contract.
+  const quote = useReadContract({
+    ...lunettaContract,
+    abi: lunettaAbi,
+    functionName: "quote",
+    args: [BigInt(Math.max(1, quantity))],
+    query: { enabled: chainConfig.isContractConfigured && Boolean(s) && !derived?.soldOut, refetchInterval: 6_000 },
+  });
+  const tiers = useReadContract({
+    ...lunettaContract,
+    abi: lunettaAbi,
+    functionName: "priceTiers",
+    query: { enabled: chainConfig.isContractConfigured, staleTime: 60_000 },
+  });
+  const total = quote.data ?? 0n;
+  const quoteReady = quote.data !== undefined;
   const wrongChain = isConnected && walletChainId !== chainConfig.chainId;
 
   const needsToken = total > 0n;
@@ -224,7 +239,7 @@ export function MintPanel() {
 
       {/* pricing */}
       <dl className="mt-6 grid grid-cols-2 gap-3">
-        <PriceTile label="Price" value={priceNow === 0n ? "Free" : `${formatAmount(priceNow, dec)} ${sym}`} active={open} />
+        <PriceTile label="Current price" value={priceNow === 0n ? "Free" : `${formatAmount(priceNow, dec)} ${sym}`} active={open} />
         <PriceTile label="Per wallet" value={`${s.walletLimit.toString()} max`} active={open} />
       </dl>
       <p className="mt-3 rounded-2xl border-2 border-ink bg-ember/15 p-3 text-sm">
@@ -236,6 +251,37 @@ export function MintPanel() {
           </span>
         )}
       </p>
+
+      {tiers.data && tiers.data[0].length > 1 && (
+        <div className="mt-4">
+          <p className="text-sm font-semibold text-ink/70">Price rises as Lunettas are minted</p>
+          <ol className="mt-2 space-y-1.5 text-sm">
+            {tiers.data[0].map((end, i) => {
+              const start = i === 0 ? 1n : tiers.data[0][i - 1] + 1n;
+              const last = end > s.maxSupply ? s.maxSupply : end;
+              const next = s.totalMinted + 1n;
+              const current = !derived.soldOut && next >= start && next <= last;
+              const done = s.totalMinted >= last;
+              return (
+                <li
+                  key={end.toString()}
+                  className={`flex items-center justify-between rounded-xl border-2 px-3 py-1.5 ${
+                    current ? "border-ink bg-lantern/40 font-semibold" : done ? "border-ink/10 text-ink/45 line-through" : "border-ink/15"
+                  }`}
+                >
+                  <span>
+                    #{start.toString()} – #{last.toString()}
+                    {current && <span className="ml-2 rounded-full bg-ink px-2 py-0.5 text-xs text-paper">now</span>}
+                  </span>
+                  <span className="tabular-nums">
+                    {tiers.data[1][i] === 0n ? "Free" : `${formatAmount(tiers.data[1][i], dec)} ${sym}`}
+                  </span>
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+      )}
 
       <div className="mt-7 border-t-2 border-dashed border-ink/25 pt-6">
         {derived.soldOut ? (
@@ -280,7 +326,7 @@ export function MintPanel() {
             {open && (
               <div className="mt-5 flex items-baseline justify-between">
                 <span className="font-semibold">Total (burned)</span>
-                <span className="font-display text-2xl font-bold">{total === 0n ? "Free" : `${formatAmount(total, dec)} ${sym}`}</span>
+                <span className="font-display text-2xl font-bold">{!quoteReady ? "…" : total === 0n ? "Free" : `${formatAmount(total, dec)} ${sym}`}</span>
               </div>
             )}
 
@@ -295,7 +341,7 @@ export function MintPanel() {
             <button
               className="btn-lantern mt-5 w-full"
               onClick={mint}
-              disabled={Boolean(disabledReason) || busy || derived.maxQty < 1 || tokenMissing}
+              disabled={Boolean(disabledReason) || busy || derived.maxQty < 1 || tokenMissing || !quoteReady}
             >
               {step === "approving"
                 ? confirmingInWallet

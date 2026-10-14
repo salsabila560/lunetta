@@ -26,7 +26,7 @@ Default target chain is **Robinhood Chain mainnet** (chain ID 4663; testnet 4663
 - **ERC-721A** + `ERC721AQueryable` (cheap batch mints, `tokensOfOwner` for the gallery). Token IDs start at 1.
 - **Single public mint, no whitelist:** the owner opens or closes it with `setMintOpen`.
 - **Paid in the project ERC-20, burned on mint**: `paymentToken` (set/lockable by the owner) is pulled from the buyer straight to `0x…dEaD` in the mint transaction via `SafeERC20`; `totalBurned` tracks the running total. No ETH is accepted for mints.
-- **One price** (`price`, in token units) and **one per-wallet limit** (`walletLimit`), both adjustable by the owner.
+- **Tiered price by mint number** (`priceTiers`, `quote(qty)`, `currentPrice()`; default #1–100 = 1M, #101–200 = 2M, #201–300 = 5M, #301–1000 = 10M tokens, set with `setPriceTiers`) and **one per-wallet limit** (`walletLimit`). A mint that crosses a tier boundary pays each NFT at its own tier's price.
 - **Max supply** fixed at deploy (`immutable`), enforced on every mint path including `ownerMint`.
 - **Delayed reveal:** every token returns `UNREVEALED_URI` until `reveal("ipfs://CID/")`; then `baseURI + id + ".json"`. `freezeMetadata()` locks it permanently.
 - **ERC-2981 royalties** (default 5%, owner-adjustable).

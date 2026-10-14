@@ -12,7 +12,8 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 
 /// @title  Lunetta — moon-cat guardians of the floating isles
 /// @notice ERC-721A collection with a single public mint (no whitelist),
-///         a per-wallet limit, delayed reveal and ERC-2981 royalties.
+///         tiered pricing by mint number, a per-wallet limit, delayed reveal
+///         and ERC-2981 royalties.
 ///         Mints are paid in an ERC-20 token (not ETH). Every payment is sent
 ///         straight from the buyer to the burn address in the same transaction,
 ///         so the contract and the owner never hold mint proceeds.
@@ -26,7 +27,7 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
     /// @notice Everything the mint page needs in a single RPC call.
     struct MintState {
         bool mintOpen;
-        uint256 price;
+        uint256 price; // price of the next NFT to be minted
         uint256 walletLimit;
         uint256 totalMinted;
         uint256 maxSupply;
@@ -51,13 +52,14 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
     error NotRevealed();
     error PaymentTokenNotSet();
     error PaymentTokenIsLocked();
+    error InvalidPriceTiers();
 
     // ---------------------------------------------------------------------
     // Events
     // ---------------------------------------------------------------------
 
     event MintOpenChanged(bool open);
-    event PriceUpdated(uint256 price);
+    event PriceTiersUpdated(uint256[] tierEnds, uint256[] tierPrices);
     event WalletLimitUpdated(uint256 walletLimit);
     event Revealed(string baseURI);
     event BaseURIUpdated(string baseURI);
@@ -87,8 +89,11 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
 
     /// @notice True while anyone can mint.
     bool public mintOpen;
-    /// @notice Price per NFT in the payment token's smallest unit.
-    uint256 public price;
+    /// @notice Tiered pricing. NFT number n (1-based) costs tierPrices[i] for the first i
+    ///         with n <= tierEnds[i]. Example: ends [100,200,300,1000] with prices
+    ///         [1M,2M,5M,10M] tokens. Prices are in the payment token's smallest unit.
+    uint256[] private _tierEnds;
+    uint256[] private _tierPrices;
     /// @notice Max NFTs one wallet can mint.
     uint256 public walletLimit;
 
@@ -108,7 +113,8 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
         string memory name_,
         string memory symbol_,
         uint256 maxSupply_,
-        uint256 price_,
+        uint256[] memory tierEnds_,
+        uint256[] memory tierPrices_,
         uint256 walletLimit_,
         string memory unrevealedURI_,
         address royaltyReceiver_,
@@ -119,7 +125,7 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
         if (royaltyReceiver_ == address(0)) revert ZeroAddress();
 
         maxSupply = maxSupply_;
-        price = price_;
+        _setPriceTiers(tierEnds_, tierPrices_);
         walletLimit = walletLimit_;
         _unrevealedURI = unrevealedURI_;
         _setDefaultRoyalty(royaltyReceiver_, royaltyBps_);
@@ -130,7 +136,7 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
     // ---------------------------------------------------------------------
 
     /// @notice Public mint, open to everyone while `mintOpen` is true.
-    /// @dev    The buyer must first approve this contract for `price * quantity` payment tokens,
+    /// @dev    The buyer must first approve this contract for `quote(quantity)` payment tokens,
     ///         which are sent straight to the burn address.
     function mint(uint256 quantity) external nonReentrant {
         if (!mintOpen) revert MintClosed();
@@ -138,7 +144,7 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
         if (mintedBy[msg.sender] + quantity > walletLimit) revert ExceedsWalletLimit();
 
         mintedBy[msg.sender] += quantity;
-        _burnPayment(price * quantity, quantity);
+        _burnPayment(quote(quantity), quantity);
         _mint(msg.sender, quantity);
     }
 
@@ -169,13 +175,40 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
     // Views
     // ---------------------------------------------------------------------
 
+    /// @notice Total cost of the next `quantity` NFTs, summed tier by tier.
+    function quote(uint256 quantity) public view returns (uint256 cost) {
+        uint256 from = _totalMinted();
+        uint256 to = from + quantity;
+        uint256 prevEnd;
+        uint256 n = _tierEnds.length;
+        for (uint256 i; i < n; ++i) {
+            uint256 end = _tierEnds[i];
+            if (end > from) {
+                uint256 lo = from > prevEnd ? from : prevEnd;
+                uint256 hi = to < end ? to : end;
+                if (hi > lo) cost += (hi - lo) * _tierPrices[i];
+                if (end >= to) break;
+            }
+            prevEnd = end;
+        }
+    }
+
+    /// @notice Price of the next NFT to be minted.
+    function currentPrice() public view returns (uint256) {
+        return quote(1);
+    }
+
+    function priceTiers() external view returns (uint256[] memory tierEnds, uint256[] memory tierPrices) {
+        return (_tierEnds, _tierPrices);
+    }
+
     function totalMinted() external view returns (uint256) {
         return _totalMinted();
     }
 
     function mintState(address account) external view returns (MintState memory s) {
         s.mintOpen = mintOpen;
-        s.price = price;
+        s.price = _totalMinted() < maxSupply ? currentPrice() : 0;
         s.walletLimit = walletLimit;
         s.totalMinted = _totalMinted();
         s.maxSupply = maxSupply;
@@ -229,10 +262,22 @@ contract Lunetta is ERC721AQueryable, ERC2981, Ownable2Step, ReentrancyGuard {
         emit PaymentTokenLocked(address(paymentToken));
     }
 
-    /// @notice Price per NFT in the payment token's smallest unit (e.g. 1_000_000e18 for 1,000,000 tokens).
-    function setPrice(uint256 newPrice) external onlyOwner {
-        price = newPrice;
-        emit PriceUpdated(newPrice);
+    /// @notice Replace the price tiers. `tierEnds` must be strictly increasing and the last
+    ///         one must cover `maxSupply`. Prices are in the payment token's smallest unit.
+    function setPriceTiers(uint256[] calldata tierEnds, uint256[] calldata tierPrices) external onlyOwner {
+        _setPriceTiers(tierEnds, tierPrices);
+    }
+
+    function _setPriceTiers(uint256[] memory tierEnds, uint256[] memory tierPrices) private {
+        uint256 n = tierEnds.length;
+        if (n == 0 || n != tierPrices.length || n > 20) revert InvalidPriceTiers();
+        for (uint256 i = 1; i < n; ++i) {
+            if (tierEnds[i] <= tierEnds[i - 1]) revert InvalidPriceTiers();
+        }
+        if (tierEnds[0] == 0 || tierEnds[n - 1] < maxSupply) revert InvalidPriceTiers();
+        _tierEnds = tierEnds;
+        _tierPrices = tierPrices;
+        emit PriceTiersUpdated(tierEnds, tierPrices);
     }
 
     function setWalletLimit(uint256 newLimit) external onlyOwner {

@@ -32,13 +32,32 @@ contract LunettaTest is Test {
     address internal eve = makeAddr("eve");
 
     uint256 internal constant MAX_SUPPLY = 20;
-    uint256 internal constant PUB_PRICE = 1_000_000 ether; // 1,000,000 tokens
+    uint256 internal constant PUB_PRICE = 1_000_000 ether; // tier 1: 1,000,000 tokens
+    uint256 internal constant P2 = 2_000_000 ether;
+    uint256 internal constant P3 = 5_000_000 ether;
+    uint256 internal constant P4 = 10_000_000 ether;
     uint256 internal constant PUB_LIMIT = 3;
     uint256 internal constant START_BALANCE = 100_000_000 ether;
     string internal constant HIDDEN = "ipfs://hidden/hidden.json";
 
+    /// Scaled-down version of the real schedule: #1-5, #6-10, #11-15, #16-20.
+    function _tiers() internal pure returns (uint256[] memory ends, uint256[] memory prices) {
+        ends = new uint256[](4);
+        prices = new uint256[](4);
+        (ends[0], ends[1], ends[2], ends[3]) = (5, 10, 15, MAX_SUPPLY);
+        (prices[0], prices[1], prices[2], prices[3]) = (PUB_PRICE, P2, P3, P4);
+    }
+
+    function _flat(uint256 max, uint256 p) internal pure returns (uint256[] memory ends, uint256[] memory prices) {
+        ends = new uint256[](1);
+        prices = new uint256[](1);
+        ends[0] = max;
+        prices[0] = p;
+    }
+
     function setUp() public {
-        nft = new Lunetta("Lunetta", "LUNA", MAX_SUPPLY, PUB_PRICE, PUB_LIMIT, HIDDEN, royalty, 500, owner);
+        (uint256[] memory ends, uint256[] memory prices) = _tiers();
+        nft = new Lunetta("Lunetta", "LUNA", MAX_SUPPLY, ends, prices, PUB_LIMIT, HIDDEN, royalty, 500, owner);
         token = new MockToken();
 
         vm.startPrank(owner);
@@ -51,6 +70,14 @@ contract LunettaTest is Test {
             vm.prank(users[i]);
             token.approve(address(nft), type(uint256).max);
         }
+    }
+
+    function _newFlat(uint256 max, uint256 p, uint256 limit, string memory hidden, address roy, uint96 bps, address own)
+        internal
+        returns (Lunetta)
+    {
+        (uint256[] memory ends, uint256[] memory prices) = _flat(max == 0 ? 1 : max, p);
+        return new Lunetta("L", "L", max, ends, prices, limit, hidden, roy, bps, own);
     }
 
     function _open() internal {
@@ -68,7 +95,7 @@ contract LunettaTest is Test {
         assertEq(nft.maxSupply(), MAX_SUPPLY);
         assertEq(nft.owner(), owner);
         assertFalse(nft.mintOpen());
-        assertEq(nft.price(), PUB_PRICE);
+        assertEq(nft.currentPrice(), PUB_PRICE);
         assertEq(nft.walletLimit(), PUB_LIMIT);
         assertEq(nft.totalSupply(), 0);
         assertFalse(nft.revealed());
@@ -79,12 +106,12 @@ contract LunettaTest is Test {
 
     function test_RevertWhen_ZeroMaxSupply() public {
         vm.expectRevert(Lunetta.InvalidQuantity.selector);
-        new Lunetta("L", "L", 0, 0, 1, HIDDEN, royalty, 500, owner);
+        _newFlat(0, 0, 1, HIDDEN, royalty, 500, owner);
     }
 
     function test_RevertWhen_ZeroRoyaltyReceiver() public {
         vm.expectRevert(Lunetta.ZeroAddress.selector);
-        new Lunetta("L", "L", 10, 0, 1, HIDDEN, address(0), 500, owner);
+        _newFlat(10, 0, 1, HIDDEN, address(0), 500, owner);
     }
 
     // ------------------------------------------------------------------
@@ -163,7 +190,7 @@ contract LunettaTest is Test {
     }
 
     function test_RevertWhen_PaymentTokenNotSet() public {
-        Lunetta fresh = new Lunetta("L", "L", 10, 1, 5, HIDDEN, royalty, 500, owner);
+        Lunetta fresh = _newFlat(10, 1, 5, HIDDEN, royalty, 500, owner);
         vm.prank(owner);
         fresh.setMintOpen(true);
         vm.prank(eve);
@@ -172,7 +199,7 @@ contract LunettaTest is Test {
     }
 
     function test_FreeMintNeedsNoToken() public {
-        Lunetta fresh = new Lunetta("L", "L", 10, 0, 5, HIDDEN, royalty, 500, owner);
+        Lunetta fresh = _newFlat(10, 0, 5, HIDDEN, royalty, 500, owner);
         vm.prank(owner);
         fresh.setMintOpen(true);
         vm.prank(eve);
@@ -214,7 +241,7 @@ contract LunettaTest is Test {
     }
 
     function test_RevertWhen_LockWithoutToken() public {
-        Lunetta fresh = new Lunetta("L", "L", 10, 1, 5, HIDDEN, royalty, 500, owner);
+        Lunetta fresh = _newFlat(10, 1, 5, HIDDEN, royalty, 500, owner);
         vm.prank(owner);
         vm.expectRevert(Lunetta.PaymentTokenNotSet.selector);
         fresh.lockPaymentToken();
@@ -231,8 +258,9 @@ contract LunettaTest is Test {
     function testFuzz_BurnEqualsPriceTimesQuantity(uint256 qty, uint256 price) public {
         qty = bound(qty, 1, PUB_LIMIT);
         price = bound(price, 0, START_BALANCE / PUB_LIMIT);
+        (uint256[] memory ends, uint256[] memory prices) = _flat(MAX_SUPPLY, price);
         vm.prank(owner);
-        nft.setPrice(price);
+        nft.setPriceTiers(ends, prices);
         _open();
         vm.prank(eve);
         nft.mint(qty);
@@ -279,6 +307,94 @@ contract LunettaTest is Test {
         vm.expectRevert(Lunetta.ExceedsWalletLimit.selector);
         nft.mint(2);
         vm.stopPrank();
+    }
+
+    // ------------------------------------------------------------------
+    // Tiered pricing
+    // ------------------------------------------------------------------
+
+    function test_QuoteWithinFirstTier() public view {
+        assertEq(nft.quote(1), PUB_PRICE);
+        assertEq(nft.quote(5), PUB_PRICE * 5);
+    }
+
+    function test_QuoteAcrossTiers() public view {
+        // #1-5 @1M, #6-10 @2M, #11-12 @5M
+        assertEq(nft.quote(12), PUB_PRICE * 5 + P2 * 5 + P3 * 2);
+        assertEq(nft.quote(MAX_SUPPLY), PUB_PRICE * 5 + P2 * 5 + P3 * 5 + P4 * 5);
+    }
+
+    function test_PriceRisesAsSupplyIsMinted() public {
+        vm.prank(owner);
+        nft.ownerMint(owner, 4); // #1-4
+        assertEq(nft.currentPrice(), PUB_PRICE);
+        // next 3 = #5 @1M + #6,#7 @2M
+        assertEq(nft.quote(3), PUB_PRICE + P2 * 2);
+
+        _open();
+        vm.prank(eve);
+        nft.mint(3);
+        assertEq(token.balanceOf(DEAD), PUB_PRICE + P2 * 2, "burn follows the tiers");
+        assertEq(nft.currentPrice(), P2); // #8
+
+        vm.prank(owner);
+        nft.ownerMint(owner, 3); // #8-10
+        assertEq(nft.currentPrice(), P3); // #11
+        vm.prank(owner);
+        nft.ownerMint(owner, 5); // #11-15
+        assertEq(nft.currentPrice(), P4); // #16
+        assertEq(nft.mintState(eve).price, P4);
+    }
+
+    function test_MintStatePriceZeroWhenSoldOut() public {
+        vm.prank(owner);
+        nft.ownerMint(owner, MAX_SUPPLY);
+        assertEq(nft.mintState(eve).price, 0);
+    }
+
+    function test_PriceTiersView() public view {
+        (uint256[] memory ends, uint256[] memory prices) = nft.priceTiers();
+        assertEq(ends.length, 4);
+        assertEq(ends[3], MAX_SUPPLY);
+        assertEq(prices[0], PUB_PRICE);
+        assertEq(prices[3], P4);
+    }
+
+    function test_RevertWhen_InvalidTiers() public {
+        uint256[] memory ends = new uint256[](2);
+        uint256[] memory prices = new uint256[](2);
+        vm.startPrank(owner);
+        // not increasing
+        (ends[0], ends[1]) = (10, 10);
+        vm.expectRevert(Lunetta.InvalidPriceTiers.selector);
+        nft.setPriceTiers(ends, prices);
+        // does not cover max supply
+        (ends[0], ends[1]) = (5, MAX_SUPPLY - 1);
+        vm.expectRevert(Lunetta.InvalidPriceTiers.selector);
+        nft.setPriceTiers(ends, prices);
+        // length mismatch
+        uint256[] memory one = new uint256[](1);
+        (ends[0], ends[1]) = (5, MAX_SUPPLY);
+        vm.expectRevert(Lunetta.InvalidPriceTiers.selector);
+        nft.setPriceTiers(ends, one);
+        // empty
+        vm.expectRevert(Lunetta.InvalidPriceTiers.selector);
+        nft.setPriceTiers(new uint256[](0), new uint256[](0));
+        vm.stopPrank();
+    }
+
+    function testFuzz_QuoteEqualsSumOfSingles(uint8 premint, uint8 qty) public {
+        uint256 pre = bound(premint, 0, MAX_SUPPLY - 1);
+        uint256 q = bound(qty, 1, MAX_SUPPLY - pre);
+        if (pre > 0) {
+            vm.prank(owner);
+            nft.ownerMint(owner, pre);
+        }
+        uint256 expected;
+        for (uint256 n = pre + 1; n <= pre + q; ++n) {
+            expected += n <= 5 ? PUB_PRICE : n <= 10 ? P2 : n <= 15 ? P3 : P4;
+        }
+        assertEq(nft.quote(q), expected);
     }
 
     // ------------------------------------------------------------------
@@ -334,8 +450,9 @@ contract LunettaTest is Test {
         vm.startPrank(eve);
         vm.expectRevert(err);
         nft.setMintOpen(true);
+        (uint256[] memory e, uint256[] memory pr) = _flat(MAX_SUPPLY, 0);
         vm.expectRevert(err);
-        nft.setPrice(0);
+        nft.setPriceTiers(e, pr);
         vm.expectRevert(err);
         nft.setWalletLimit(100);
         vm.expectRevert(err);
@@ -361,10 +478,11 @@ contract LunettaTest is Test {
 
     function test_AdminSetters() public {
         vm.startPrank(owner);
-        nft.setPrice(2);
+        (uint256[] memory e, uint256[] memory pr) = _flat(MAX_SUPPLY, 2);
+        nft.setPriceTiers(e, pr);
         nft.setWalletLimit(8);
         vm.stopPrank();
-        assertEq(nft.price(), 2);
+        assertEq(nft.currentPrice(), 2);
         assertEq(nft.walletLimit(), 8);
     }
 
