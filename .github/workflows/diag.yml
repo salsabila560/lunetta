@@ -7,26 +7,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: foundry-rs/foundry-toolchain@v1
-      - name: Inspect failed deploy
+      - name: Check deploy at nonce 3
         env:
           RPC: https://rpc.mainnet.chain.robinhood.com
           ADDR: "0xdBC844C1D92d99303EEf6Cd853BcF82BBE505E6B"
         run: |
           set +e
-          B=$(cast rpc eth_getBlockByNumber 0x$(printf '%x' 88288523) true --rpc-url $RPC)
-          echo "::notice title=blk::$(echo "$B" | jq -c '[.transactions[] | {hash, from, to, gas}]' | cut -c1-900)"
-          H=$(echo "$B" | jq -r --arg a "$(echo $ADDR | tr A-Z a-z)" '.transactions[] | select((.from|ascii_downcase)==$a) | .hash' | head -1)
-          echo "::notice title=hash::x$H"
-          R=$(cast receipt $H --rpc-url $RPC --json)
-          echo "::notice title=receipt::$(echo $R | jq -c '{status,gasUsed,cumulativeGasUsed,gasUsedForL1,effectiveGasPrice,contractAddress}')"
-          T=$(cast tx $H --rpc-url $RPC --json)
-          echo "::notice title=tx-gas::$(echo $T | jq -c '{gas,maxFeePerGas,maxPriorityFeePerGas,type}') inputlen=$(echo $T | jq -r '.input' | wc -c)"
-          INPUT=$(echo $T | jq -r '.input')
+          echo "::notice title=nonce::$(cast nonce $ADDR --rpc-url $RPC)"
+          for N in 3 4; do
+            C=$(cast compute-address --nonce $N $ADDR | awk '{print $NF}')
+            L=$(cast code $C --rpc-url $RPC | wc -c)
+            echo "::notice title=nonce$N::$C codelen=$L"
+            if [ "$L" -gt 10 ]; then
+              echo "::notice title=state$N::owner=$(cast call $C 'owner()(address)' --rpc-url $RPC) max=$(cast call $C 'maxSupply()(uint256)' --rpc-url $RPC) open=$(cast call $C 'mintOpen()(bool)' --rpc-url $RPC) tiers=$(cast call $C 'priceTiers()(uint256[],uint256[])' --rpc-url $RPC | tr '\n' ' ')"
+            fi
+          done
           echo "::notice title=balance::$(cast balance $ADDR --rpc-url $RPC --ether)"
-          EST=$(cast estimate --from $ADDR --rpc-url $RPC --create $INPUT 2>&1 | tail -3)
-          echo "::notice title=estimate-now::$EST"
-          CALL=$(cast call --from $ADDR --rpc-url $RPC --create $INPUT 2>&1 | tail -3 | cut -c1-300)
-          echo "::notice title=simulate-now::$CALL"
-          RUN=$(cast run $H --rpc-url $RPC 2>&1 | tail -15 | tr '\n' ' ' | cut -c1-900)
-          echo "::notice title=trace::$RUN"
-          echo "::notice title=chain::$(cast chain-id --rpc-url $RPC) block=$(cast block-number --rpc-url $RPC)"
+          echo "::notice title=cors::$(curl -s -o /dev/null -w '%{http_code}' -X OPTIONS -H 'Origin: https://lunetta.fun' -H 'Access-Control-Request-Method: POST' $RPC) $(curl -s -D - -o /dev/null -X POST -H 'Origin: https://lunetta.fun' -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' $RPC | grep -i 'access-control' | tr '\r\n' '  ')"
