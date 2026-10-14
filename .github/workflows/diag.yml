@@ -10,7 +10,7 @@ jobs:
       - name: Inspect failed deploy
         env:
           RPC: https://rpc.mainnet.chain.robinhood.com
-          ADDR: "0xdBC844C1D92d99303EEf6Cd853BcF82BBE505E"
+          ADDR: "0xdBC844C1D92d99303EEf6Cd853BcF82BBE505E6B"
         run: |
           set +e
           J=$(curl -s "https://robinhoodchain.blockscout.com/api/v2/addresses/$ADDR/transactions")
