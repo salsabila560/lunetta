@@ -6,26 +6,23 @@ jobs:
   diag:
     runs-on: ubuntu-latest
     steps:
-      - uses: foundry-rs/foundry-toolchain@v1
-      - name: Find Lunetta deploys owned by the Bitget wallet
-        env:
-          RPC: https://rpc.mainnet.chain.robinhood.com
-          OWNER: "dbc844c1d92d99303eef6cd853bcf82bbe505e6b"
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - name: Browser check of /mint
         run: |
-          set +e
-          HI=$(cast block-number --rpc-url $RPC)
-          echo "::notice title=head::$HI"
-          FOUND=0
-          for B in $(seq $HI -1 $((HI-3500))); do
-            cast rpc eth_getBlockByNumber $(printf '0x%x' $B) true --rpc-url $RPC \
-              | jq -r --arg o "$OWNER" '.transactions[] | select(.to==null) | select((.input|ascii_downcase)|contains($o)) | "\(.hash) \(.from) \(.nonce) \(.gas)"' > /tmp/hits
-            while read H F N G; do
-              [ -z "$H" ] && continue
-              FOUND=$((FOUND+1))
-              S=$(cast receipt $H status --rpc-url $RPC); C=$(cast receipt $H contractAddress --rpc-url $RPC); U=$(cast receipt $H gasUsed --rpc-url $RPC)
-              L=$(cast code $C --rpc-url $RPC | wc -c)
-              echo "::notice title=deploy$FOUND::block=$B hash=$H from=$F nonce=$N gaslimit=$G used=$U status=$S contract=$C codelen=$L"
-              if [ "$L" -gt 10 ]; then echo "::notice title=state$FOUND::owner=$(cast call $C 'owner()(address)' --rpc-url $RPC) minted=$(cast call $C 'totalMinted()(uint256)' --rpc-url $RPC) open=$(cast call $C 'mintOpen()(bool)' --rpc-url $RPC) token=$(cast call $C 'paymentToken()(address)' --rpc-url $RPC)"; fi
-            done < /tmp/hits
-          done
-          echo "::notice title=total::$FOUND deploy tx found in last 3500 blocks"
+          mkdir t && cd t && npm init -y >/dev/null && npm i playwright@1.47.2 >/dev/null && npx playwright install --with-deps chromium >/dev/null 2>&1
+          cat > c.js <<'JS'
+          const { chromium } = require('playwright');
+          (async()=>{const b=await chromium.launch();const p=await b.newPage({viewport:{width:420,height:900}});
+          const out=[];const log=(s)=>{out.push(s);};
+          p.on('console',m=>{ if(m.type()==='error'||m.type()==='warning') log('CONSOLE '+m.type()+' '+m.text().slice(0,250))});
+          p.on('pageerror',e=>log('PAGEERR '+e.message.slice(0,250)));
+          p.on('request',r=>{const u=r.url(); if(!u.includes('lunetta.fun')&&!u.includes('fonts')) log('REQ '+r.method()+' '+u.slice(0,90)+' '+(r.postData()||'').slice(0,140))});
+          p.on('response',async r=>{const u=r.url(); if(u.includes('rpc')||u.includes('chain')){let t='';try{t=(await r.text()).slice(0,200)}catch{} log('RES '+r.status()+' '+u.slice(0,60)+' '+t)}});
+          p.on('requestfailed',r=>log('FAIL '+r.url().slice(0,100)+' '+(r.failure()&&r.failure().errorText)));
+          await p.goto('https://lunetta.fun/mint',{waitUntil:'domcontentloaded'});await p.waitForTimeout(15000);
+          log('TEXT '+(await p.innerText('main')).slice(0,300).replace(/\n/g,' | '));
+          for (const l of out.slice(0,40)) console.log('::notice::'+l.replace(/\r?\n/g,' '));
+          await b.close();})();
+          JS
+          node c.js
