@@ -13,11 +13,17 @@ jobs:
           ADDR: "0xdBC844C1D92d99303EEf6Cd853BcF82BBE505E6B"
         run: |
           set +e
-          J=$(curl -s -A "Mozilla/5.0" "https://robinhoodchain.blockscout.com/api/v2/addresses/$ADDR/transactions")
-          echo "::notice title=api::$(echo "$J" | head -c 300 | tr '\n' ' ')"
-          echo "$J" | jq -c '.items[0:3][] | {hash, status, result, gas_limit, gas_used, gas_price, block_number, created: .created_contract.hash}' | while read l; do echo "::notice title=tx::$l"; done
-          H=$(echo "$J" | jq -r '.items[0].hash')
-          RUN=$(cast run $H --rpc-url $RPC 2>&1 | grep -v "^\s*$" | tail -12 | tr '\n' ' ' | cut -c1-700)
+          A=$(echo $ADDR | tr A-Z a-z)
+          TARGET=$(date -d '2026-10-14 10:46:30 UTC' +%s)
+          LO=88288523; HI=$(cast block-number --rpc-url $RPC)
+          while [ $((HI-LO)) -gt 1 ]; do MID=$(((LO+HI)/2)); TS=$(cast block $MID timestamp --rpc-url $RPC); if [ $TS -lt $TARGET ]; then LO=$MID; else HI=$MID; fi; done
+          echo "::notice title=start::$LO"
+          H=""
+          for B in $(seq $LO $((LO+1500))); do
+            R=$(cast rpc eth_getBlockByNumber $(printf '0x%x' $B) true --rpc-url $RPC | jq -r --arg a "$A" '.transactions[] | select((.from|ascii_downcase)==$a) | .hash')
+            if [ -n "$R" ]; then H=$R; echo "::notice title=found::block $B $H"; break; fi
+          done
+          RUN=$(cast run $H --rpc-url $RPC 2>&1 | grep -v "^\s*$" | tail -8 | tr '\n' ' ' | cut -c1-600)
           echo "::notice title=trace::$RUN"
           echo "::notice title=txgas::$(cast tx $H gas --rpc-url $RPC) used=$(cast receipt $H gasUsed --rpc-url $RPC) status=$(cast receipt $H status --rpc-url $RPC)"
           echo "::notice title=nonce::$(cast nonce $ADDR --rpc-url $RPC)"
